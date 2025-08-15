@@ -1,0 +1,29 @@
+### Aplikacja - Lumos (MVP)
+
+### Główny problem
+Weryfikowanie informacji usłyszanych w podcastach podczas słuchania jest trudne. Użytkownicy ufają hostom i gościom, a odwołania do „badań” bywają nietrafne. Lumos, działając w tle, wykrywa wątpliwe twierdzenia i pokazuje użytkownikowi zweryfikowane informacje wraz ze źródłami.
+
+### Najmniejszy zestaw funkcjonalności
+- **Rozszerzenie przeglądarki (desktop-first)**: wykrywanie odtwarzania na `youtube.com/*`, pobieranie metadanych (tytuł, kanał, timestamp).
+- **Zgoda i prompt**: overlay „Analizować ten epizod w tle?” z opcjami (zawsze dla YouTube / tylko ten odcinek / nie teraz).
+- **Powiadomienia**: natywne alerty z fragmentem tezy, werdyktem („wątpliwe”/„potwierdzone”) i skrótem uzasadnienia; klik prowadzi do widoku szczegółów.
+- **Widok szczegółów**: kontekst transkrypcji, kluczowa teza, krótkie uzasadnienie, linki do źródeł.
+- **Historia**: lista alertów per odcinek i konto; możliwość oceny „trafne/nie­trafne”.
+- **Profil i autentykacja**: logowanie (np. e‑mail + magic link/OAuth), preferencje (domeny objęte analizą, czułość alertów).
+- **Płatności**: prosty plan subskrypcyjny (Stripe Checkout), trial i blokada premium.
+- **Integracja z AI**: (1) transkrypcja speech to text (2) ekstrakcja claimów, (3) wyszukiwanie źródeł (RAG lub w sieci), (4) ocena wiarygodności, (5) generowanie uzasadnień.
+- **Desktop-first**: poprawne działanie w nowoczesnych przeglądarkach; minimalna optymalizacja mobilna.
+
+### Co NIE wchodzi w zakres MVP
+- Obsługa wielu platform poza YouTube na start.
+- Analiza „zero‑latency” (akceptowalne opóźnienie 30–60 s).
+- Integracje z API Spotify/Apple/YouTube (subskrypcje, playlisty).
+- Ręczne dodawanie odcinków przez URL.
+- Funkcje społecznościowe, współdzielenie i zaawansowane raporty.
+- Aplikacje mobilne i pełna optymalizacja mobile.
+- Profilowanie „wiarygodności osób” – oceniamy twierdzenia, nie ludzi.
+- Wielojęzyczność poza językiem bazowym MVP.
+
+### Kryteria sukcesu
+- ≥ 70% nowych użytkowników włącza analizę dla YouTube i otrzymuje ≥ 1 alert w 7 dni.
+- ≥ 80% ocen alertów „trafne”.
