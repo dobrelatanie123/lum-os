@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Lumos Setup - Ad Blocker Configuration</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      line-height: 1.6;
+      color: #333;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .logo {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
+      border-radius: 16px;
+      margin: 0 auto 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      font-size: 32px;
+    }
+    
+    .alert {
+      background: #fff3cd;
+      border: 1px solid #ffeaa7;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    
+    .alert h3 {
+      margin: 0 0 8px 0;
+      color: #856404;
+    }
+    
+    .steps {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    
+    .step {
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #dee2e6;
+    }
+    
+    .step:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+    
+    .step-number {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      background: #007bff;
+      color: white;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 24px;
+      font-size: 14px;
+      font-weight: bold;
+      margin-right: 12px;
+    }
+    
+    .browser-specific {
+      display: none;
+    }
+    
+    .browser-specific.active {
+      display: block;
+    }
+    
+    .code {
+      background: #f1f3f4;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    
+    .test-section {
+      background: #e7f3ff;
+      border: 1px solid #bee5eb;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+    }
+    
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      margin: 8px;
+    }
+    
+    .btn:hover {
+      background: #0056b3;
+    }
+    
+    .btn-secondary {
+      background: #6c757d;
+    }
+    
+    .btn-secondary:hover {
+      background: #545b62;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">L</div>
+    <h1>Lumos Setup Required</h1>
+    <p>Your ad blocker is preventing Lumos from working properly</p>
+  </div>
+
+  <div class="alert">
+    <h3>🛡️ Ad Blocker Detected</h3>
+    <p>Lumos needs to communicate with its fact-checking API, but your ad blocker is blocking these requests. Don't worry - this is an easy fix!</p>
+  </div>
+
+  <!-- Browser Detection -->
+  <div id="arc-instructions" class="browser-specific">
+    <div class="steps">
+      <h2>Arc Browser Setup</h2>
+      
+      <div class="step">
+        <span class="step-number">1</span>
+        <strong>Open YouTube video where you want to use Lumos</strong>
+        <br>Go to the YouTube video you were watching.
+      </div>
+      
+      <div class="step">
+        <span class="step-number">2</span>
+        <strong>Disable Shields for YouTube</strong>
+        <br>Click the <strong>🛡️ Shield icon</strong> in the address bar
+        <br>Select <strong>"Disable shields for this site"</strong>
+      </div>
+      
+      <div class="step">
+        <span class="step-number">3</span>
+        <strong>Allow localhost connections</strong>
+        <br>Arc may also block localhost. In Arc settings:
+        <br>• Go to <strong>Arc → Settings → Privacy</strong>
+        <br>• Under "Shields", add exception for: <span class="code">localhost</span>
+      </div>
+      
+      <div class="step">
+        <span class="step-number">4</span>
+        <strong>Refresh and test</strong>
+        <br>Refresh the YouTube page and try Lumos again.
+      </div>
+    </div>
+  </div>
+
+  <div id="chrome-instructions" class="browser-specific">
+    <div class="steps">
+      <h2>Chrome Browser Setup</h2>
+      
+      <div class="step">
+        <span class="step-number">1</span>
+        <strong>Check for ad blocker extensions</strong>
+        <br>Go to <span class="code">chrome://extensions/</span>
+        <br>Look for: uBlock Origin, AdBlock Plus, Ghostery, etc.
+      </div>
+      
+      <div class="step">
+        <span class="step-number">2</span>
+        <strong>Whitelist YouTube and localhost</strong>
+        <br>In your ad blocker settings, add these to whitelist:
+        <br>• <span class="code">youtube.com</span>
+        <br>• <span class="code">localhost</span>
+        <br>• <span class="code">127.0.0.1</span>
+      </div>
+      
+      <div class="step">
+        <span class="step-number">3</span>
+        <strong>Refresh and test</strong>
+        <br>Refresh the YouTube page and try Lumos again.
+      </div>
+    </div>
+  </div>
+
+  <div id="brave-instructions" class="browser-specific">
+    <div class="steps">
+      <h2>Brave Browser Setup</h2>
+      
+      <div class="step">
+        <span class="step-number">1</span>
+        <strong>Disable Brave Shields</strong>
+        <br>Click the <strong>🦁 Brave icon</strong> in the address bar
+        <br>Toggle off "Shields" for YouTube
+      </div>
+      
+      <div class="step">
+        <span class="step-number">2</span>
+        <strong>Allow localhost in Brave settings</strong>
+        <br>Go to <strong>brave://settings/shields</strong>
+        <br>Add <span class="code">localhost</span> to allowed sites
+      </div>
+      
+      <div class="step">
+        <span class="step-number">3</span>
+        <strong>Refresh and test</strong>
+        <br>Refresh the YouTube page and try Lumos again.
+      </div>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h3>🧪 Test Your Setup</h3>
+    <p>After following the steps above:</p>
+    
+    <a href="#" id="test-youtube" class="btn">🔙 Back to YouTube</a>
+    <a href="http://localhost:4322/test-whisper.html" class="btn btn-secondary" target="_blank">🔧 Test API</a>
+  </div>
+
+  <script>
+    // Detect browser and show appropriate instructions
+    function detectBrowser() {
+      const userAgent = navigator.userAgent;
+      
+      if (userAgent.includes('Arc')) {
+        document.getElementById('arc-instructions').classList.add('active');
+      } else if (userAgent.includes('Brave')) {
+        document.getElementById('brave-instructions').classList.add('active');
+      } else {
+        document.getElementById('chrome-instructions').classList.add('active');
+      }
+    }
+
+    // Handle back to YouTube
+    document.getElementById('test-youtube').addEventListener('click', (e) => {
+      e.preventDefault();
+      // Close this tab and focus back on YouTube
+      chrome.tabs.query({url: "*://www.youtube.com/*"}, (tabs) => {
+        if (tabs.length > 0) {
+          chrome.tabs.update(tabs[0].id, {active: true});
+          window.close();
+        } else {
+          window.location.href = 'https://www.youtube.com/';
+        }
+      });
+    });
+
+    // Initialize
+    detectBrowser();
+  </script>
+</body>
+</html>
+
+

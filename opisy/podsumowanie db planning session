@@ -1,0 +1,37 @@
+<conversation_summary>
+<decisions>
+1. Główne encje ustalone dla MVP to: Użytkownicy, Alerty, Podcasty, Transkrypcje, Whitelista oraz Płatności.
+2. Każda encja będzie posiadać podstawowy zestaw atrybutów, tj. unikalny identyfikator (UUID), specyficzne dane (np. metadane alertów, informacje o transkrypcji, dane kont użytkowników) oraz standardowe pola audytu (CreatedAt i UpdatedAt).
+3. Relacje między encjami zostaną ustalone jako 1:N, przy czym relacja pomiędzy Podcastem a Transkrypcją będzie 1:1 – chyba że zdecydujemy się na obsługę wielu wersji transkrypcji.
+4. Indeksowanie jako mechanizm przyspieszający wyszukiwanie będzie rozważane w przyszłości, gdy zwiększy się ilość danych i zapytań.
+5. Partycjonowanie tabel nie jest wdrażane w obecnej fazie, ale strategia skalowalności pozostaje otwarta na przyszłość.
+6. Zasady RLS (Row Level Security) zostaną oparte na rolach: „użytkownik” ma dostęp jedynie do swoich danych, natomiast „admin” posiada pełny dostęp i nie podlega opłatom.
+7. Na obecnym etapie pozostajemy przy tradycyjnym definiowaniu kolumn, nie stosując typu JSONB.
+8. Pola audytu będą implementowane przy użyciu typu TIMESTAMP, z automatycznymi triggerami aktualizującymi pola CreatedAt oraz UpdatedAt.
+9. Przyjęto, że w pierwszej iteracji wykorzystamy podstawową funkcjonalność PostgreSQL, bez wdrażania zaawansowanych funkcji, takich jak pełnotekstowe wyszukiwanie.
+10. Procedury i wyzwalacze do automatycznej aktualizacji pól audytu zostaną wdrożone w podstawowej formie.
+</decisions>
+
+<matched_recommendations>
+1. Zdefiniować encję Użytkownicy z atrybutami: id (UUID), email, hasło (w formie zahaszowanej), role („użytkownik”, „admin”), CreatedAt, UpdatedAt.
+2. Zdefiniować encję Alerty z atrybutami: id (UUID), odniesienie do Podcastu oraz Użytkownika, metadane alertu (typ, status, szczegóły), CreatedAt, UpdatedAt.
+3. Zdefiniować encję Podcasty z atrybutami: id (UUID), tytuł, URL, opis, CreatedAt, UpdatedAt.
+4. Zdefiniować encję Transkrypcje z atrybutami: id (UUID), podcast_id (FK – relacja 1:1), treść transkrypcji, CreatedAt, UpdatedAt.
+5. Zdefiniować encję Whitelista z atrybutami: id (UUID), identyfikator lub nazwa kanału, opis konfiguracji, CreatedAt, UpdatedAt.
+6. Zdefiniować encję Płatności z atrybutami: id (UUID), odniesienie do Użytkownika, status płatności, kwota, szczegóły transakcji, CreatedAt, UpdatedAt.
+7. Zapewnić bezpieczeństwo poprzez wdrożenie RLS – użytkownik widzi tylko swoje dane, admin ma pełen dostęp.
+8. Zastosować mechanizmy audytu z użyciem pól typu TIMESTAMP oraz triggerów do automatycznej aktualizacji.
+9. Utrzymać schemat bazowy z możliwością rozszerzenia o indeksowanie i zaawansowane funkcje PostgreSQL w miarę rozwoju systemu.
+10. Wdrożyć podstawowe procedury/wyzwalacze, które będą automatycznie aktualizowały pola audytu przy operacjach INSERT/UPDATE.
+</matched_recommendations>
+
+<database_planning_summary>
+Podczas rozmowy ustalono, że schemat bazy danych dla MVP będzie opierał się na sześciu głównych encjach: Użytkownicy, Alerty, Podcasty, Transkrypcje, Whitelista oraz Płatności. Każda encja będzie miała unikalny identyfikator (UUID), specyficzne atrybuty odpowiadające jej funkcji (np. dane transkrypcji, metadane alertów, dane kont użytkowników) oraz standardowe pola audytu (CreatedAt i UpdatedAt). Relacje między encjami przyjęto jako 1:N (np. jeden użytkownik może mieć wiele alertów), przy czym relacja między Podcastem a Transkrypcją ustalona jest jako 1:1, chyba że w przyszłości zdecydujemy się na przechowywanie wielu wersji transkrypcji.
+Bezpieczeństwo bazy zostanie zapewnione przez wdrożenie zasad RLS opartych na rolach – użytkownik ma dostęp tylko do swoich danych, natomiast administrator posiada pełen dostęp, zwolniony z opłat. Początkowo, nie planujemy implementacji zaawansowanych funkcji PostgreSQL, takich jak pełnotekstowe wyszukiwanie, ani stosowania indeksowania, jednak w przyszłości strategia ta może zostać rozwinięta wraz ze wzrostem danych. Dodatkowo, zastosowanie triggerów umożliwi automatyczną aktualizację pól audytu przy każdej operacji INSERT/UPDATE, co zapewni spójność danych.
+</database_planning_summary>
+
+<unresolved_issues>
+1. Decyzja dotycząca możliwości przechowywania wielu wersji transkrypcji dla jednego podcastu pozostaje otwarta i wymaga dalszego rozważenia.
+2. Ostateczne kryteria wdrażania indeksowania oraz ewentualnego wdrożenia zaawansowanych funkcji PostgreSQL (np. pełnotekstowe wyszukiwanie) pozostają do potwierdzenia w kolejnych etapach projektu.
+</unresolved_issues>
+</conversation_summary>
