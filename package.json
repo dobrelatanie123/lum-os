@@ -1,8 +1,37 @@
 {
+  "name": "lumos-ai-server",
+  "version": "1.0.0",
+  "description": "AI-powered fact-checking server for Lumos browser extension",
+  "main": "api-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node api-server.js",
+    "dev": "node --watch api-server.js",
+    "test": "node --test tests/*.test.js",
+    "test:watch": "node --test --watch tests/*.test.js",
+    "validate-config": "node -e \"import('./dist/lib/ai-config.js').then(m => { m.validateAIConfig(); console.log('✅ Configuration is valid'); })\"",
+    "check-costs": "node -e \"import('./lib/cost-tracker.js').then(m => m.getDailyCosts())\""
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.55.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
     "express": "^5.1.0",
-    "multer": "^2.0.2"
-  }
+    "multer": "^2.0.2",
+    "openai": "^5.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.17",
+    "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "ai",
+    "fact-checking",
+    "whisper",
+    "gpt-4",
+    "youtube",
+    "browser-extension"
+  ],
+  "author": "Lumos Team",
+  "license": "MIT"
 }
