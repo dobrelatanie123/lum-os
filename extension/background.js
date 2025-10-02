@@ -2,6 +2,9 @@
 class LumosBackground {
   constructor() {
     this.alertsStorage = new Map();
+    this.groupedStorage = new Map(); // videoId -> latest grouped topics
+    this.pollers = new Map(); // videoId -> intervalId
+    this.astroUrl = 'http://localhost:4321';
     this.init();
   }
 
@@ -21,6 +24,11 @@ class LumosBackground {
       }
     });
 
+    // Load settings
+    chrome.storage.sync.get(['apiUrl', 'astroUrl'], (res) => {
+      if (res.astroUrl) this.astroUrl = res.astroUrl;
+    });
+
     // Handle browser notifications click
     chrome.notifications.onClicked.addListener((notificationId) => {
       this.onNotificationClick(notificationId);
@@ -34,7 +42,7 @@ class LumosBackground {
     chrome.storage.sync.set({
       autoRecord: true,
       alertThreshold: 0.7,
-      apiUrl: 'http://localhost:4322'
+      apiUrl: 'http://localhost:3001'
     });
 
     // Show welcome notification
@@ -64,6 +72,10 @@ class LumosBackground {
         this.getStoredAlerts(message.videoId, sendResponse);
         break;
 
+      case 'GET_GROUPED_ALERTS':
+        this.getGroupedAlerts(message.videoId, sendResponse);
+        break;
+
       case 'CLEAR_ALERTS':
         this.clearAlerts(message.videoId);
         sendResponse({ success: true });
@@ -71,6 +83,16 @@ class LumosBackground {
 
       case 'AD_BLOCKER_DETECTED':
         this.handleAdBlockerDetection(message, sender.tab);
+        sendResponse({ success: true });
+        break;
+
+      case 'START_POLL':
+        this.startPolling(message.videoId, sender.tab?.id);
+        sendResponse({ success: true });
+        break;
+
+      case 'STOP_POLL':
+        this.stopPolling(message.videoId);
         sendResponse({ success: true });
         break;
 
@@ -175,7 +197,7 @@ class LumosBackground {
     }
 
     // Open our fact-check details page
-    const detailsUrl = `http://localhost:4322/alerts?video_id=${data.videoId}`;
+    const detailsUrl = `http://localhost:4321/alerts?video_id=${data.videoId}`;
     chrome.tabs.create({ url: detailsUrl });
 
     // Clean up
@@ -191,8 +213,49 @@ class LumosBackground {
   clearAlerts(videoId) {
     if (videoId) {
       this.alertsStorage.delete(videoId);
+      this.groupedStorage.delete(videoId);
+      this.stopPolling(videoId);
     } else {
       this.alertsStorage.clear();
+      this.groupedStorage.clear();
+      for (const [vid] of this.pollers.entries()) this.stopPolling(vid);
+    }
+  }
+
+  getGroupedAlerts(videoId, sendResponse) {
+    const topics = this.groupedStorage.get(videoId) || [];
+    sendResponse({ topics });
+  }
+
+  startPolling(videoId, tabId) {
+    if (!videoId) return;
+    // Avoid duplicate pollers
+    if (this.pollers.has(videoId)) return;
+    const fetchNow = async () => {
+      try {
+        const url = `${this.astroUrl}/api/alerts/for-video?video_id=${encodeURIComponent(videoId)}&group=topic`;
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          this.groupedStorage.set(videoId, data);
+          // Badge: number of grouped topics
+          this.updateBadge(String(data.length || ''), tabId);
+        }
+      } catch {}
+    };
+    // Immediate fetch then interval
+    fetchNow();
+    const id = setInterval(fetchNow, 10000);
+    this.pollers.set(videoId, id);
+  }
+
+  stopPolling(videoId) {
+    if (!videoId) return;
+    const id = this.pollers.get(videoId);
+    if (id) {
+      clearInterval(id);
+      this.pollers.delete(videoId);
     }
   }
 

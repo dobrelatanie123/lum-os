@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// Load environment variables
+import dotenv from 'dotenv';
+dotenv.config();
+
 // Standalone API server for Lumos (bypass Astro issues)
 import express from 'express';
 import cors from 'cors';
@@ -62,6 +66,22 @@ app.get('/api/health', (req, res) => {
     success: true, 
     message: 'Lumos API Server is running',
     timestamp: Date.now() 
+  });
+});
+
+// Root index - friendly status
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    name: 'Lumos API Server',
+    status: 'ok',
+    endpoints: {
+      health: '/api/health',
+      transcribe: '/api/transcribe/audio',
+      factCheck: '/api/fact-check',
+      processYouTube: '/api/process-youtube',
+      alertsProxy: '/api/alerts/for-video'
+    }
   });
 });
 
@@ -234,6 +254,22 @@ app.post('/api/fact-check', async (req, res) => {
       error: error.message,
       retryable: error.retryable || false
     });
+  }
+});
+
+// Proxy grouped alerts from Astro to keep extension on port 3001
+app.get('/api/alerts/for-video', async (req, res) => {
+  try {
+    console.log('🔎 Proxy /api/alerts/for-video request', req.query);
+    const qs = req.url.includes('?') ? req.url.substring(req.url.indexOf('?') + 1) : '';
+    const target = `http://localhost:4321/api/alerts/for-video${qs ? `?${qs}` : ''}`;
+    console.log('↗️  Forwarding to', target);
+    const resp = await fetch(target, { method: 'GET' });
+    const text = await resp.text();
+    res.status(resp.status).set('Content-Type', resp.headers.get('content-type') || 'application/json').send(text);
+  } catch (err) {
+    console.error('❌ Proxy /api/alerts/for-video failed:', err);
+    res.status(502).json({ success: false, message: 'Proxy failed', error: (err && err.message) || String(err) });
   }
 });
 

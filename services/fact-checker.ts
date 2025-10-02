@@ -2,7 +2,9 @@ import OpenAI from 'openai';
 import { AI_CONFIG } from '../lib/ai-config.js';
 import { CostTracker } from './cost-tracker.js';
 import { RetryHandler, CircuitBreaker } from './retry-handler.js';
-import { StudyLinker } from './study-linker.js';
+import { AcademicSearchService } from './academic-search.js';
+import { AcademicAnalyzerService } from './academic-analyzer.js';
+import { ClaimBuilder, type CanonicalClaim } from './claim-builder.js';
 import { GPTError, FactCheckResult, FactCheckAnalysis, Claim, Source, GPTErrorCode } from '../lib/ai-types.js';
 
 /**
@@ -13,7 +15,9 @@ export class FactChecker {
   private openai: OpenAI;
   private costTracker: CostTracker;
   private gptCircuitBreaker: CircuitBreaker;
-  private studyLinker: StudyLinker;
+  private academicSearch: AcademicSearchService;
+  private academicAnalyzer: AcademicAnalyzerService;
+  private claimBuilder: ClaimBuilder;
 
   constructor(costTracker: CostTracker) {
     const openaiConfig: any = {
@@ -31,11 +35,9 @@ export class FactChecker {
       60000, // 1 minute timeout
       2 // success threshold
     );
-    this.studyLinker = new StudyLinker({
-      maxResults: 3,
-      includeAbstracts: true,
-      minCredibility: 'medium'
-    });
+    this.academicSearch = new AcademicSearchService();
+    this.academicAnalyzer = new AcademicAnalyzerService();
+    this.claimBuilder = new ClaimBuilder();
   }
 
   /**
@@ -63,7 +65,7 @@ export class FactChecker {
   }
 
   /**
-   * Perform the actual fact-checking using GPT-4
+   * Perform the actual fact-checking using GPT (Responses API with web_search, fallback to chat.completions)
    */
   private async performFactCheck(transcription: string, videoId: string): Promise<FactCheckResult> {
     return await RetryHandler.withCircuitBreaker(
@@ -71,40 +73,66 @@ export class FactChecker {
         const startTime = Date.now();
         
         try {
-          const response = await this.openai.chat.completions.create({
-            model: AI_CONFIG.gpt.model,
-            messages: [
-              {
-                role: 'system',
-                content: this.getSystemPrompt()
-              },
-              {
-                role: 'user',
-                content: `Please analyze the following transcription for factual claims and provide a comprehensive fact-checking analysis:\n\n${transcription}`
-              }
-            ],
+          // Preferred path: Responses API with web_search tool on GPT-5
+          const input = `${this.getSystemPrompt()}\n\nUSER TASK:\nPlease analyze the following transcription for factual claims and provide a comprehensive fact-checking analysis. Use only real, verifiable sources found via web search. If you cannot verify a source, leave sources empty.\n\nTRANSCRIPTION:\n${transcription}`;
+
+          const respAny: any = await (this.openai as any).responses.create({
+            model: 'gpt-5',
+            tools: [ { type: 'web_search' } ],
+            input,
             temperature: 0.3,
-            max_tokens: 4000
+            // Responses API uses max_output_tokens
+            max_output_tokens: 4000
           });
 
           const duration = Date.now() - startTime;
-          const cost = this.calculateGPTCost(response.usage?.total_tokens || 0);
-          
-          // Track cost
-          this.costTracker.trackGPTCost(response.usage?.prompt_tokens || 0, response.usage?.completion_tokens || 0);
-          
-          console.log(`✅ GPT-4 fact-check completed in ${duration}ms, cost: $${cost.toFixed(4)}`);
+          const totalTokens: number = (respAny.usage?.total_tokens)
+            || ((respAny.usage?.input_tokens || 0) + (respAny.usage?.output_tokens || 0))
+            || 0;
+          const promptTokens: number = (respAny.usage?.input_tokens) || (respAny.usage?.prompt_tokens) || 0;
+          const completionTokens: number = (respAny.usage?.output_tokens) || (respAny.usage?.completion_tokens) || 0;
+          const cost = this.calculateGPTCost(totalTokens);
 
-          const content = response.choices[0]?.message?.content;
+          // Track cost using whichever fields are available
+          this.costTracker.trackGPTCost(promptTokens, completionTokens);
+
+          const content: string = respAny.output_text
+            || (respAny.output?.[0]?.content?.[0]?.text?.value)
+            || '';
+
           if (!content) {
-            throw new Error('No response content from GPT-4');
+            throw new Error('No response content from GPT-5 (Responses API)');
           }
 
+          console.log(`✅ GPT-5 (responses) fact-check completed in ${duration}ms, cost: $${cost.toFixed(4)}`);
           return await this.parseFactCheckResponse(content, videoId, cost);
-        } catch (error) {
-          const duration = Date.now() - startTime;
-          console.error(`❌ GPT-4 fact-check failed after ${duration}ms:`, error);
-          throw error;
+        } catch (primaryError) {
+          // Fallback: legacy Chat Completions (gpt-4o)
+          console.warn('⚠️ Falling back to chat.completions due to Responses API error:', (primaryError as Error)?.message || primaryError);
+          try {
+            const response = await this.openai.chat.completions.create({
+              model: 'gpt-4o',
+              messages: [
+                { role: 'system', content: this.getSystemPrompt() },
+                { role: 'user', content: `Please analyze the following transcription for factual claims and provide a comprehensive fact-checking analysis. Use only real, verifiable sources. If you cannot verify a source, leave sources empty.\n\n${transcription}` }
+              ],
+              temperature: 0.3,
+              max_tokens: 4000
+            });
+
+            const duration = Date.now() - startTime;
+            const cost = this.calculateGPTCost(response.usage?.total_tokens || 0);
+            this.costTracker.trackGPTCost(response.usage?.prompt_tokens || 0, response.usage?.completion_tokens || 0);
+
+            console.log(`✅ GPT-4o (fallback) fact-check completed in ${duration}ms, cost: $${cost.toFixed(4)}`);
+            const content = response.choices[0]?.message?.content || '';
+            if (!content) throw new Error('No response content from fallback model');
+            return await this.parseFactCheckResponse(content, videoId, cost);
+          } catch (fallbackError) {
+            const duration = Date.now() - startTime;
+            console.error(`❌ Fact-check failed after ${duration}ms (both paths):`, fallbackError);
+            throw fallbackError;
+          }
         }
       },
       this.gptCircuitBreaker
@@ -122,7 +150,8 @@ IMPORTANT INSTRUCTIONS:
 2. For each claim, determine if it's verifiable, partially verifiable, or unverifiable
 3. Provide evidence-based analysis for each claim
 4. Rate the overall credibility of the content
-5. Suggest sources for verification when possible
+5. Use web search to find real academic sources and studies that support or refute the claims
+6. Only include sources that you can verify exist and are accessible through web search
 
 RESPONSE FORMAT:
 Return a JSON object with the following structure:
@@ -136,7 +165,14 @@ Return a JSON object with the following structure:
       "verifiability": "verifiable|partially_verifiable|unverifiable",
       "credibility": "high|medium|low",
       "analysis": "detailed analysis of the claim",
-      "sources": ["suggested source 1", "suggested source 2"],
+      "sources": [
+        {
+          "title": "actual study title or source name",
+          "url": "real URL to the study or source",
+          "credibility": "high|medium|low",
+          "type": "academic|news|government|expert|other"
+        }
+      ],
       "timestamp": "approximate time in transcription"
     }
   ],
@@ -168,23 +204,47 @@ Be thorough but concise. Focus on claims that are most likely to be factually in
         for (const claimData of parsed.claims) {
           console.log(`🔍 Finding studies for claim: "${claimData.text?.substring(0, 50)}..."`);
           
-          // Find studies for this specific claim
-          const claimSources = await this.studyLinker.findStudiesForClaim(
-            claimData.text || '',
-            claimData.analysis || ''
-          );
+          // Use GPT's web search results directly
+          console.log(`🔍 Using GPT web search results for claim: "${claimData.text?.substring(0, 50)}..."`);
           
-          // Convert string sources to Source objects if they exist
-          const stringSources = claimData.sources || [];
-          const convertedSources: Source[] = stringSources.map((source: string) => ({
-            title: source,
-            url: '',
-            credibility: 'medium' as const,
-            type: 'other' as const
-          }));
-          
-          // Combine found studies with suggested sources
-          const combinedSources = [...claimSources, ...convertedSources];
+          // Keep only valid, http(s) URLs from GPT output
+          let combinedSources: Source[] = (claimData.sources || [])
+            .filter((s: any) => s && typeof s.url === 'string' && /^https?:\/\//.test(s.url))
+            .map((s: any) => ({
+              title: s.title || 'Source',
+              url: s.url,
+              credibility: (s.credibility as 'high' | 'medium' | 'low') || 'medium',
+              type: (s.type as 'academic' | 'news' | 'government' | 'expert' | 'other') || 'other'
+            }));
+
+          // Fallback: if GPT didn't return usable URLs, canonicalize claim and perform academic search (top 10) and select best
+          if (combinedSources.length === 0) {
+            try {
+              console.log('⚠️ No valid URLs from GPT; falling back to academic search…');
+              const span = `${claimData.text || ''} ${claimData.analysis || ''}`.trim().slice(0, 400);
+              let boostedQuery = span;
+              try {
+                const canonical: CanonicalClaim | null = await this.claimBuilder.canonicalizeSpan(span);
+                if (canonical) {
+                  boostedQuery = this.claimBuilder.buildBoostedQuery(canonical);
+                }
+              } catch {}
+              const searchResults = await this.academicSearch.searchAcademicPapers(boostedQuery, 10);
+
+              // Ask GPT to select from provided results (never invent)
+              const analyzed = await this.academicAnalyzer.analyzeAcademicResults(
+                claimData.text || '',
+                searchResults
+              );
+
+              combinedSources = (analyzed || [])
+                .filter((s: any) => s && typeof s.url === 'string' && /^https?:\/\//.test(s.url))
+                .slice(0, 3);
+            } catch (fallbackError) {
+              console.warn('⚠️ Academic fallback failed:', fallbackError);
+              combinedSources = [];
+            }
+          }
           allSources.push(...combinedSources);
           
           claims.push({

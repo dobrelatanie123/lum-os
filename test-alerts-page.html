@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Alerts Page</title>
+</head>
+<body>
+    <h1>Test Alerts API</h1>
+    <div id="alerts"></div>
+    
+    <script>
+        async function loadAlerts() {
+            try {
+                const response = await fetch('/api/alerts/for-video?video_id=xXVB8A5xvSw');
+                const alerts = await response.json();
+                
+                const container = document.getElementById('alerts');
+                container.innerHTML = `
+                    <h2>Found ${alerts.length} alerts:</h2>
+                    ${alerts.map(alert => `
+                        <div style="border: 1px solid #ccc; margin: 10px; padding: 10px;">
+                            <h3>${alert.details.claim}</h3>
+                            <p><strong>Verdict:</strong> ${alert.details.verdict}</p>
+                            <p><strong>Reasoning:</strong> ${alert.details.reasoning}</p>
+                            <p><strong>Sources:</strong> ${alert.details.sources.join(', ')}</p>
+                        </div>
+                    `).join('')}
+                `;
+            } catch (error) {
+                document.getElementById('alerts').innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        }
+        
+        loadAlerts();
+    </script>
+</body>
+</html>

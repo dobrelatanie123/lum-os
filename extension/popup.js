@@ -86,11 +86,21 @@ class LumosPopup {
     if (!this.currentStatus?.videoId) return;
 
     try {
+      // Prefer grouped topics
+      const grouped = await chrome.runtime.sendMessage({
+        type: 'GET_GROUPED_ALERTS',
+        videoId: this.currentStatus.videoId
+      });
+      if (Array.isArray(grouped?.topics) && grouped.topics.length > 0) {
+        this.displayGrouped(grouped.topics);
+        return;
+      }
+
+      // Fallback to alert chunks
       const response = await chrome.runtime.sendMessage({
         type: 'GET_ALERTS',
         videoId: this.currentStatus.videoId
       });
-      
       this.displayAlerts(response.alerts || []);
       
     } catch (error) {
@@ -216,6 +226,29 @@ class LumosPopup {
         <div class="alert-confidence">Confidence: ${Math.round(alert.confidence * 100)}%</div>
       </div>
     `).join('');
+  }
+
+  displayGrouped(topics) {
+    const alertsList = document.getElementById('alerts-list');
+    const alertCount = document.getElementById('alert-count');
+    alertCount.textContent = topics.length;
+    if (!topics.length) {
+      alertsList.innerHTML = '<div class="no-alerts">No alerts detected</div>';
+      return;
+    }
+    const items = topics.slice(0, 5).map(t => {
+      const claim = t.details?.canonical_claim || t.details?.claim || 'Grouped topic';
+      const urls = (() => { try { return JSON.parse(t.urls || '[]'); } catch { return []; } })();
+      const link = urls[0] ? urls[0].replace(/^https?:\/\//, '') : 'no link';
+      return `
+        <div class="alert-item">
+          <div class="alert-verdict">topic</div>
+          <div class="alert-claim">${this.truncateText(claim, 120)}</div>
+          <div class="alert-confidence">${link}</div>
+        </div>
+      `;
+    }).join('');
+    alertsList.innerHTML = items;
   }
 
   truncateText(text, maxLength) {

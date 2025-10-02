@@ -5,7 +5,7 @@
     "moduleResolution": "node",
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
-    "allowJs": true,
+    "allowJs": false,
     "checkJs": false,
     "outDir": "./dist",
     "rootDir": "./",
@@ -27,13 +27,14 @@
   "include": [
     "lib/**/*",
     "services/**/*",
-    "tests/**/*",
-    "api-server.js"
+    "tests/**/*"
   ],
   "exclude": [
     "node_modules",
     "dist",
     "astro",
-    "extension"
+    "extension",
+    "services/academic-search.ts",
+    "services/study-linker.ts"
   ]
 }

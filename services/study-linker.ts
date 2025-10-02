@@ -116,66 +116,205 @@ export class StudyLinker {
   }
 
   /**
-   * Search academic papers (simulated - in real implementation, use APIs like CrossRef, PubMed, etc.)
+   * Search academic papers using real web search (like Perplexity)
    */
   private async searchAcademicPapers(searchTerms: string[]): Promise<StudySearchResult[]> {
-    // This is a simulation - in a real implementation, you would:
-    // 1. Use CrossRef API for DOI lookups
-    // 2. Use PubMed API for medical studies
-    // 3. Use Google Scholar API (unofficial)
-    // 4. Use arXiv API for preprints
+    console.log(`📚 Searching for real academic papers: ${searchTerms.join(', ')}`);
     
-    console.log(`📚 Searching academic papers for: ${searchTerms.join(', ')}`);
-    
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Mock results based on common fitness/nutrition topics
-    const mockResults: StudySearchResult[] = [];
-    
-    if (searchTerms.some(term => term.includes('muscle') || term.includes('fat'))) {
-      mockResults.push({
-        title: "Body Recomposition: Can You Build Muscle and Lose Fat Simultaneously?",
-        authors: ["Barakat, C", "Pearson, J", "Escalante, G"],
-        journal: "Journal of the International Society of Sports Nutrition",
-        year: 2023,
-        url: "https://jissn.biomedcentral.com/articles/10.1186/s12970-023-00878-2",
-        abstract: "This systematic review examines the evidence for body recomposition in trained individuals...",
-        doi: "10.1186/s12970-023-00878-2",
-        credibility: 'high',
-        type: 'academic'
-      });
+    try {
+      // Use web search to find actual academic papers
+      const results = await this.searchWebForRealPapers(searchTerms);
+      return results.slice(0, this.options.maxResults);
+      
+    } catch (error) {
+      console.error('❌ Error searching for academic papers:', error);
+      return [];
     }
-    
-    if (searchTerms.some(term => term.includes('protein') || term.includes('calorie'))) {
-      mockResults.push({
-        title: "Protein Requirements for Muscle Mass Maintenance and Gain in Trained Individuals",
-        authors: ["Morton, RW", "Murphy, KT", "McKellar, SR"],
-        journal: "Journal of the International Society of Sports Nutrition",
-        year: 2022,
-        url: "https://jissn.biomedcentral.com/articles/10.1186/s12970-022-00720-8",
-        abstract: "A comprehensive review of protein requirements for athletes and active individuals...",
-        doi: "10.1186/s12970-022-00720-8",
-        credibility: 'high',
-        type: 'academic'
-      });
-    }
-    
-    if (searchTerms.some(term => term.includes('resistance') || term.includes('training'))) {
-      mockResults.push({
-        title: "Resistance Training and Body Composition in Adults: A Systematic Review",
-        authors: ["Schoenfeld, BJ", "Ogborn, D", "Krieger, JW"],
-        journal: "Sports Medicine",
-        year: 2024,
-        url: "https://link.springer.com/article/10.1007/s40279-024-02000-8",
-        abstract: "This systematic review examines the effects of resistance training on body composition...",
-        doi: "10.1007/s40279-024-02000-8",
-        credibility: 'high',
-        type: 'academic'
-      });
-    }
+  }
 
-    return mockResults.slice(0, this.options.maxResults);
+  /**
+   * Search web for real academic papers (like Perplexity)
+   */
+  private async searchWebForRealPapers(searchTerms: string[]): Promise<StudySearchResult[]> {
+    try {
+      const query = searchTerms.join(' ');
+      
+      // Search for academic papers using DuckDuckGo (more reliable than Google)
+      const searchQuery = `"${query}" site:pubmed.ncbi.nlm.nih.gov OR site:scholar.google.com OR site:doi.org OR site:journals.lww.com OR site:springer.com OR site:nature.com OR site:science.org OR site:cell.com OR site:nejm.org OR site:bmj.com OR site:thelancet.com OR site:jama.com OR site:biomedcentral.com OR site:frontiersin.org OR site:plos.org OR site:hindawi.com OR site:mdpi.com OR site:sciencedirect.com OR site:wiley.com OR site:tandfonline.com OR site:sagepub.com OR site:academic.oup.com`;
+      
+      const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(searchQuery)}`;
+      
+      console.log(`🔍 Searching for real papers: ${query}`);
+      
+      const response = await fetch(searchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'gzip, deflate',
+          'DNT': '1',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Search error: ${response.status}`);
+      }
+      
+      const html = await response.text();
+      
+      // Parse search results to extract real academic papers
+      const results = this.parseRealAcademicPapers(html, searchTerms);
+      
+      return results;
+      
+    } catch (error) {
+      console.error('❌ Web search failed:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Parse search results to extract real academic papers
+   */
+  private parseRealAcademicPapers(html: string, searchTerms: string[]): StudySearchResult[] {
+    const results: StudySearchResult[] = [];
+    
+    try {
+      // Extract URLs from search results
+      const urlMatches = html.match(/href="(https?:\/\/[^"]+)"/g) || [];
+      
+      for (const match of urlMatches) {
+        const url = match.replace('href="', '').replace('"', '');
+        
+        // Filter for academic sources and extract paper details
+        if (this.isAcademicSource(url)) {
+          const paperDetails = this.extractPaperDetails(url, html, searchTerms);
+          if (paperDetails) {
+            results.push(paperDetails);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Error parsing search results:', error);
+    }
+    
+    return results;
+  }
+
+  // Basic academic-domain classifier
+  private isAcademicSource(url: string): boolean {
+    const domains = [
+      'doi.org','pubmed.ncbi.nlm.nih.gov','nature.com','science.org','cell.com','nejm.org','bmj.com','thelancet.com','jama.com',
+      'springer.com','link.springer.com','sciencedirect.com','wiley.com','tandfonline.com','sagepub.com','academic.oup.com',
+      'frontiersin.org','plos.org','hindawi.com','mdpi.com','arxiv.org','medrxiv.org','biorxiv.org','journals.lww.com','pnas.org','cambridge.org'
+    ];
+    return domains.some(d => url.includes(d));
+  }
+
+  /**
+   * Extract paper details from URL and HTML
+   */
+  private extractPaperDetails(url: string, html: string, searchTerms: string[]): StudySearchResult | null {
+    try {
+      // Extract title from the search result
+      const titleMatch = html.match(new RegExp(`href="${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>([^<]+)</a>`, 'i'));
+      const title = titleMatch ? titleMatch[1].trim() : searchTerms.join(' ') + ' - Academic Study';
+      
+      // Extract journal and year from URL
+      const journal = this.extractJournalFromUrl(url);
+      const year = this.extractYearFromUrl(url);
+      const doi = this.extractDOIFromUrl(url);
+      
+      return {
+        title: this.cleanTitle(title),
+        authors: [],
+        journal,
+        year,
+        url,
+        abstract: '',
+        doi,
+        credibility: 'high' as const,
+        type: 'academic' as const
+      };
+      
+    } catch (error) {
+      console.error('❌ Error extracting paper details:', error);
+      return null;
+    }
+  }
+
+  // Utilities mirrored from academic-search to satisfy compiler
+  private extractJournalFromUrl(url: string): string {
+    if (url.includes('pubmed.ncbi.nlm.nih.gov')) return 'PubMed';
+    if (url.includes('scholar.google.com')) return 'Google Scholar';
+    if (url.includes('doi.org')) return 'DOI Database';
+    if (url.includes('journals.lww.com')) return 'Lippincott Williams & Wilkins';
+    if (url.includes('springer.com') || url.includes('link.springer.com')) return 'Springer';
+    if (url.includes('nature.com')) return 'Nature';
+    if (url.includes('science.org')) return 'Science';
+    if (url.includes('cell.com')) return 'Cell';
+    if (url.includes('nejm.org')) return 'NEJM';
+    if (url.includes('bmj.com')) return 'BMJ';
+    if (url.includes('thelancet.com')) return 'The Lancet';
+    if (url.includes('jama.com') || url.includes('jamanetwork.com')) return 'JAMA';
+    if (url.includes('biomedcentral.com')) return 'BioMed Central';
+    if (url.includes('frontiersin.org')) return 'Frontiers';
+    if (url.includes('plos.org')) return 'PLOS';
+    if (url.includes('hindawi.com')) return 'Hindawi';
+    if (url.includes('mdpi.com')) return 'MDPI';
+    if (url.includes('sciencedirect.com')) return 'ScienceDirect';
+    if (url.includes('wiley.com')) return 'Wiley';
+    if (url.includes('tandfonline.com')) return 'Taylor & Francis';
+    if (url.includes('sagepub.com')) return 'SAGE';
+    if (url.includes('academic.oup.com')) return 'Oxford University Press';
+    if (url.includes('pnas.org')) return 'PNAS';
+    if (url.includes('cambridge.org')) return 'Cambridge';
+    return 'Academic Journal';
+  }
+
+  private extractYearFromUrl(url: string): number {
+    const match = url.match(/(20\d{2})/);
+    return match ? parseInt(match[1]) : new Date().getFullYear();
+  }
+
+  private extractDOIFromUrl(url: string): string {
+    if (url.includes('doi.org/')) {
+      const m = url.match(/doi\.org\/(.+)/);
+      if (m) return m[1];
+    }
+    return '';
+  }
+
+  /**
+   * Clean and format title
+   */
+  private cleanTitle(title: string): string {
+    return title
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .trim();
+  }
+
+
+  /**
+   * Remove duplicate results based on title similarity
+   */
+  private removeDuplicateResults(results: StudySearchResult[]): StudySearchResult[] {
+    const seen = new Set<string>();
+    return results.filter(result => {
+      const key = result.title.toLowerCase().trim();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
   }
 
   /**

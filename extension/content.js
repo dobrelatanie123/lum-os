@@ -5,7 +5,7 @@ class LumosYouTubeMonitor {
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.currentVideoId = null;
-    this.apiUrl = 'http://localhost:3001'; // Standalone API server
+    this.apiUrl = 'http://localhost:3001'; // API server
     this.chunkDuration = 10000; // 10 seconds chunks
     this.recordingTimer = null;
     
@@ -48,6 +48,10 @@ class LumosYouTubeMonitor {
   onVideoChange() {
     console.log('📺 Video changed:', location.href);
     this.stopRecording();
+    // Stop previous polling
+    if (this.currentVideoId) {
+      chrome.runtime.sendMessage({ type: 'STOP_POLL', videoId: this.currentVideoId });
+    }
     
     setTimeout(() => {
       this.checkCurrentVideo();
@@ -65,6 +69,8 @@ class LumosYouTubeMonitor {
         if (result.autoRecord) {
           this.startRecording();
         }
+        // Start grouped alerts polling regardless of recording
+        chrome.runtime.sendMessage({ type: 'START_POLL', videoId: this.currentVideoId });
       });
     }
   }
