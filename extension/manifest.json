@@ -8,7 +8,8 @@
     "activeTab",
     "notifications",
     "storage",
-    "background"
+    "background",
+    "tabs"
   ],
   
   "host_permissions": [

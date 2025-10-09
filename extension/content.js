@@ -8,6 +8,9 @@ class LumosYouTubeMonitor {
     this.apiUrl = 'http://localhost:3001'; // API server
     this.chunkDuration = 10000; // 10 seconds chunks
     this.recordingTimer = null;
+    this.groupedTopics = [];
+    this.firedTopicKeys = new Set();
+    this.topicSchedulerId = null;
     
     this.init();
   }
@@ -26,6 +29,16 @@ class LumosYouTubeMonitor {
       this.handleMessage(message, sendResponse);
       return true; // Keep response channel open
     });
+
+    // Listen for background updates to grouped topics and refresh scheduler
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === 'GROUPED_TOPICS_UPDATED' && message.videoId === this.currentVideoId) {
+        this.fetchGroupedTopics().then(() => this.startTopicScheduler());
+      }
+    });
+
+    // Prepare toast host early for stricter CSP pages
+    try { this.ensureToastHost(); } catch {}
   }
 
   observeVideoChanges() {
@@ -52,6 +65,10 @@ class LumosYouTubeMonitor {
     if (this.currentVideoId) {
       chrome.runtime.sendMessage({ type: 'STOP_POLL', videoId: this.currentVideoId });
     }
+    // Reset grouped state
+    this.groupedTopics = [];
+    this.firedTopicKeys.clear();
+    if (this.topicSchedulerId) { clearInterval(this.topicSchedulerId); this.topicSchedulerId = null; }
     
     setTimeout(() => {
       this.checkCurrentVideo();
@@ -71,6 +88,8 @@ class LumosYouTubeMonitor {
         }
         // Start grouped alerts polling regardless of recording
         chrome.runtime.sendMessage({ type: 'START_POLL', videoId: this.currentVideoId });
+        // Initial fetch of grouped topics, then start scheduler
+        this.fetchGroupedTopics().then(() => this.startTopicScheduler());
       });
     }
   }
@@ -244,12 +263,14 @@ class LumosYouTubeMonitor {
     this.updateBadge(alerts.length.toString());
 
     // Send to popup/background for storage
+    const video = document.querySelector('video');
     chrome.runtime.sendMessage({
       type: 'ALERTS_DETECTED',
       alerts,
       transcript,
       videoId: this.currentVideoId,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      video_time_sec: video ? Math.floor(video.currentTime || 0) : undefined
     });
   }
 
@@ -335,6 +356,159 @@ class LumosYouTubeMonitor {
       type: 'UPDATE_BADGE',
       text
     });
+  }
+
+  async fetchGroupedTopics() {
+    if (!this.currentVideoId) return;
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: 'GET_GROUPED_ALERTS', videoId: this.currentVideoId });
+      const topics = Array.isArray(resp?.topics) ? resp.topics : [];
+      this.groupedTopics = topics;
+      console.log('📚 Loaded grouped topics:', topics.length);
+    } catch (e) { console.warn('Failed to fetch grouped topics', e); }
+  }
+
+  startTopicScheduler() {
+    if (this.topicSchedulerId) clearInterval(this.topicSchedulerId);
+    const video = document.querySelector('video');
+    if (!video) return;
+    const toSeconds = (t) => {
+      if (typeof t === 'number') return t > 1e10 ? Math.floor(t / 1000) : Math.floor(t);
+      if (typeof t === 'string') { const n = Date.parse(t); if (!isNaN(n)) return Math.floor(n / 1000); }
+      return NaN;
+    };
+    // Build list of (key, timeSec)
+    const schedule = this.groupedTopics.map((t) => {
+      const d = t?.details || {};
+      const vt = Number(d.video_time_sec);
+      const ts = Number.isFinite(vt) && vt >= 0 ? Math.floor(vt) : toSeconds(d.timestamp);
+      return { key: String(t?.topic_id || t?.id || Math.random()), t, timeSec: ts };
+    }).filter(x => Number.isFinite(x.timeSec));
+    // If nothing to schedule, bail early
+    if (!schedule.length) return;
+    // Sort ascending by time
+    schedule.sort((a, b) => a.timeSec - b.timeSec);
+    this.topicSchedulerId = setInterval(() => {
+      const cur = Math.floor(video.currentTime || 0);
+      for (const item of schedule) {
+        if (this.firedTopicKeys.has(item.key)) continue;
+        if (cur >= item.timeSec) {
+          this.firedTopicKeys.add(item.key);
+          // Request auto-open popup first (guaranteed supported path)
+          try { chrome.runtime.sendMessage({ type: 'OPEN_POPUP', videoId: this.currentVideoId }); } catch {}
+          // Fire notification path as well
+          chrome.runtime.sendMessage({ type: 'SHOW_GROUPED_TOPIC', topic: item.t, videoId: this.currentVideoId });
+          this.showTopicToast(item.t);
+        }
+      }
+      // Refresh topics occasionally
+      if (Math.random() < 0.05) this.fetchGroupedTopics();
+    }, 1000);
+  }
+
+  showTopicToast(topic) {
+    try {
+      const claim = (topic?.details?.canonical_claim || topic?.details?.claim || 'Fact-check topic').toString();
+      const urls = (() => { try { return JSON.parse(topic?.urls || '[]'); } catch { return []; } })();
+      const primary = (Array.isArray(urls) && urls[0]) ? urls[0] : `http://localhost:4321/alerts?video_id=${encodeURIComponent(this.currentVideoId || '')}`;
+
+      const host = this.ensureToastHost();
+
+      const card = document.createElement('div');
+      card.style.background = '#ffffff';
+      card.style.border = '1px solid rgba(0,0,0,0.1)';
+      card.style.boxShadow = '0 10px 24px rgba(0,0,0,0.14)';
+      card.style.borderRadius = '12px';
+      card.style.padding = '12px 14px';
+      card.style.marginTop = '12px';
+      card.style.color = '#111827';
+      card.style.lineHeight = '1.35';
+      card.style.cursor = 'pointer';
+      card.style.pointerEvents = 'auto';
+
+      const header = document.createElement('div');
+      header.style.display = 'flex';
+      header.style.alignItems = 'center';
+      header.style.gap = '8px';
+      header.style.marginBottom = '6px';
+      const dot = document.createElement('span');
+      dot.style.display = 'inline-block';
+      dot.style.width = '8px';
+      dot.style.height = '8px';
+      dot.style.borderRadius = '999px';
+      dot.style.background = '#f59e0b';
+      const title = document.createElement('strong');
+      title.style.fontSize = '13px';
+      title.style.letterSpacing = '0.2px';
+      title.style.color = '#374151';
+      title.textContent = 'Lumos topic alert';
+      header.appendChild(dot);
+      header.appendChild(title);
+
+      const claimEl = document.createElement('div');
+      claimEl.style.fontSize = '14px';
+      claimEl.style.marginBottom = '8px';
+      claimEl.textContent = claim.length > 180 ? (claim.slice(0,180) + '…') : claim;
+
+      const linkEl = document.createElement('div');
+      linkEl.style.fontSize = '12px';
+      linkEl.style.color = '#2563eb';
+      linkEl.textContent = 'Open details ↗';
+
+      card.appendChild(header);
+      card.appendChild(claimEl);
+      card.appendChild(linkEl);
+
+      const open = () => {
+        try { window.open(primary, '_blank', 'noopener'); } catch {}
+        try { host.removeChild(card); } catch {}
+      };
+      card.addEventListener('click', open);
+      host.appendChild(card);
+
+      // If the card is not visible (e.g., hidden by stacking context), re-attach to body as fixed overlay
+      try {
+        const rect = card.getBoundingClientRect();
+        if ((rect.width === 0 && rect.height === 0) || !document.elementFromPoint(Math.max(0, rect.right-1), Math.max(0, rect.bottom-1))) {
+          const bodyHost = document.createElement('div');
+          bodyHost.style.position = 'fixed';
+          bodyHost.style.right = '16px';
+          bodyHost.style.bottom = '24px';
+          bodyHost.style.zIndex = '2147483647';
+          document.body.appendChild(bodyHost);
+          bodyHost.appendChild(card);
+          console.log('Lumos: toast fallback to body overlay');
+        }
+      } catch {}
+
+      setTimeout(() => { try { host.removeChild(card); } catch {} }, 9000);
+    } catch {}
+  }
+
+  ensureToastHost() {
+    let host = document.getElementById('lumos-toast');
+    if (host) return host;
+    host = document.createElement('div');
+    host.id = 'lumos-toast';
+    host.style.maxWidth = '380px';
+    host.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+    host.style.pointerEvents = 'none';
+    // Always attach at top document element to bypass player/body restrictions
+    host.style.position = 'fixed';
+    host.style.right = '16px';
+    host.style.bottom = '24px';
+    host.style.zIndex = '2147483647';
+    try { document.documentElement.appendChild(host); console.log('Lumos: toast host attached to <html>'); } catch {}
+    // Re-attach if removed
+    try {
+      const obs = new MutationObserver(() => {
+        if (!document.getElementById('lumos-toast')) {
+          try { document.documentElement.appendChild(host); } catch {}
+        }
+      });
+      obs.observe(document.documentElement, { childList: true, subtree: true });
+    } catch {}
+    return host;
   }
 }
 

@@ -3,15 +3,25 @@ class LumosPopup {
   constructor() {
     this.currentTab = null;
     this.currentStatus = null;
+    this.astroUrl = 'http://localhost:4321';
+    // Promisified helpers for Chrome compatibility
+    this.sendMessage = (msg) => new Promise((resolve) => chrome.runtime.sendMessage(msg, resolve));
+    this.tabsQuery = (q) => new Promise((resolve) => chrome.tabs.query(q, resolve));
+    this.tabsSend = (tabId, msg) => new Promise((resolve) => chrome.tabs.sendMessage(tabId, msg, resolve));
+    this.storageGet = (keys) => new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
     this.init();
   }
 
   async init() {
     console.log('🔧 Popup initialized');
     
-    // Get current tab
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Get current tab; if not YouTube, try to find a YouTube tab in the window
+    const tabs = await this.tabsQuery({ active: true, currentWindow: true });
     this.currentTab = tabs[0];
+    if (!this.isYouTubePage()) {
+      const ytTabs = await this.tabsQuery({ url: '*://*.youtube.com/watch*' });
+      if (ytTabs?.length) this.currentTab = ytTabs[0];
+    }
     
     // Setup event listeners
     this.setupEventListeners();
@@ -21,9 +31,24 @@ class LumosPopup {
     
     // Load settings
     await this.loadSettings();
+    const cfg = await this.storageGet(['astroUrl']);
+    if (cfg?.astroUrl) this.astroUrl = cfg.astroUrl;
     
     // Load alerts
     await this.loadAlerts();
+
+    // Listen for live updates from background
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === 'GROUPED_TOPICS_UPDATED') {
+        // Re-render when background storage changes
+        this.loadAlerts();
+      }
+    });
+
+    // Lightweight polling to catch missed events (every 5s)
+    this.pollId = setInterval(() => {
+      this.loadAlerts();
+    }, 5000);
   }
 
   setupEventListeners() {
@@ -61,7 +86,7 @@ class LumosPopup {
 
     try {
       // Send message to content script
-      const response = await chrome.tabs.sendMessage(this.currentTab.id, {
+      const response = await this.tabsSend(this.currentTab.id, {
         type: 'GET_STATUS'
       });
       
@@ -86,9 +111,19 @@ class LumosPopup {
     if (!this.currentStatus?.videoId) return;
 
     try {
-      // Prefer grouped topics
-      const grouped = await chrome.runtime.sendMessage({
-        type: 'GET_GROUPED_ALERTS',
+      // Try quick local cache first for instant render
+      try {
+        const key = `grouped_${this.currentStatus.videoId}`;
+        const cachedLocal = await chrome.storage.local.get([key]);
+        const items = cachedLocal?.[key];
+        if (Array.isArray(items) && items.length) {
+          this.displayGrouped(items);
+        }
+      } catch {}
+
+      // Prefer grouped topics (force fetch first to avoid empty cache in some browsers)
+      const grouped = await this.sendMessage({
+        type: 'FETCH_GROUPED_ALERTS',
         videoId: this.currentStatus.videoId
       });
       if (Array.isArray(grouped?.topics) && grouped.topics.length > 0) {
@@ -96,8 +131,18 @@ class LumosPopup {
         return;
       }
 
+      // Fallback to cached grouped
+      const cached = await this.sendMessage({
+        type: 'GET_GROUPED_ALERTS',
+        videoId: this.currentStatus.videoId
+      });
+      if (Array.isArray(cached?.topics) && cached.topics.length > 0) {
+        this.displayGrouped(cached.topics);
+        return;
+      }
+
       // Fallback to alert chunks
-      const response = await chrome.runtime.sendMessage({
+      const response = await this.sendMessage({
         type: 'GET_ALERTS',
         videoId: this.currentStatus.videoId
       });
@@ -136,7 +181,7 @@ class LumosPopup {
     const stopBtn = document.getElementById('stop-btn');
     const videoInfo = document.getElementById('video-info');
     
-    if (status.isRecording) {
+    if (status?.isRecording) {
       statusEl.className = 'status active';
       statusText.textContent = 'Monitoring active';
       startBtn.disabled = true;
@@ -148,7 +193,7 @@ class LumosPopup {
       stopBtn.disabled = true;
     }
     
-    if (status.videoId) {
+    if (status?.videoId) {
       videoInfo.style.display = 'block';
       document.getElementById('video-id').textContent = `Video ID: ${status.videoId}`;
       document.getElementById('video-url').textContent = status.url;
@@ -258,16 +303,16 @@ class LumosPopup {
 
   async openAlertsPage() {
     if (this.currentStatus?.videoId) {
-      const url = `http://localhost:4322/alerts?video_id=${this.currentStatus.videoId}`;
+      const url = `${this.astroUrl}/alerts?video_id=${this.currentStatus.videoId}`;
       await chrome.tabs.create({ url });
     } else {
-      await chrome.tabs.create({ url: 'http://localhost:4322/alerts' });
+      await chrome.tabs.create({ url: `${this.astroUrl}/alerts` });
     }
     window.close();
   }
 
   async openSettingsPage() {
-    await chrome.tabs.create({ url: 'http://localhost:4322/settings' });
+    await chrome.tabs.create({ url: `${this.astroUrl}/settings` });
     window.close();
   }
 }
