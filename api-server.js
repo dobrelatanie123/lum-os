@@ -11,6 +11,7 @@ import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
 
 // Import AI services
 import { AudioProcessor } from './dist/services/audio-processor.js';
@@ -50,6 +51,19 @@ try {
   console.log('💡 Make sure to set OPENAI_API_KEY in your environment');
   process.exit(1);
 }
+
+// Optional Supabase (for live inserts). If not configured, API will still function without persistence
+let supabase = null;
+try {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (supabaseUrl && supabaseKey) {
+    supabase = createClient(supabaseUrl, supabaseKey);
+    console.log('🗄️  Supabase client initialized');
+  } else {
+    console.log('ℹ️  Supabase env not set; live alerts will not be persisted');
+  }
+} catch (e) { console.warn('⚠️  Failed to init Supabase:', e?.message || e); }
 
 // CORS for browser extension
 app.use(cors({
@@ -171,6 +185,109 @@ app.post('/api/transcribe/audio', upload.single('audio'), async (req, res) => {
       error: error.message,
       retryable: error.retryable !== false
     });
+  }
+});
+
+// Live: one-shot chunk → transcription → fact-check → persist (best-effort)
+app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No audio file provided' });
+    }
+    const { videoId, videoTimeSec, url } = req.body || {};
+    if (!videoId) {
+      return res.status(400).json({ success: false, message: 'Missing videoId' });
+    }
+
+    const start = Date.now();
+    // Transcribe with retry + circuit breaker
+    const tr = await RetryHandler.withRetry(
+      () => RetryHandler.withCircuitBreaker(
+        () => audioProcessor.transcribeAudio(req.file.buffer, req.file.originalname || 'chunk.webm'),
+        whisperCircuitBreaker
+      ),
+      3,
+      1000
+    );
+    await costTracker.trackWhisperCost(tr.duration, 'transcription');
+
+    // Fact-check the transcription text
+    const fc = await factChecker.analyzeTranscription(tr.text, videoId);
+
+    // Map GPT claims -> alert items expected by extension/background
+    const credibilityToVerdict = (c) => {
+      const v = (c || '').toLowerCase();
+      if (v === 'high') return 'high';
+      if (v === 'medium') return 'medium';
+      return 'low';
+    };
+    const credibilityToConf = (c) => {
+      const v = (c || '').toLowerCase();
+      if (v === 'high') return 0.9;
+      if (v === 'medium') return 0.6;
+      return 0.3;
+    };
+
+    const mappedAlerts = Array.isArray(fc?.claims) ? fc.claims.map((cl) => {
+      const srcs = Array.isArray(cl?.sources) ? cl.sources.filter(s => s && typeof s.url === 'string' && /^https?:\/\//.test(s.url)).map(s => s.url) : [];
+      return {
+        claim: cl?.text || '',
+        verdict: credibilityToVerdict(cl?.credibility),
+        confidence: credibilityToConf(cl?.credibility),
+        reasoning: cl?.analysis || '',
+        sources: srcs,
+        timestamp: Date.now(),
+        video_time_sec: Number.isFinite(Number(videoTimeSec)) ? Math.floor(Number(videoTimeSec)) : 0
+      };
+    }).filter(a => a.claim) : [];
+
+    // Best-effort persistence to Supabase
+    if (supabase && mappedAlerts.length) {
+      try {
+        const podcastId = `yt-${videoId}`;
+        const demoUser = process.env.DEMO_USER_ID || 'demo-user-123';
+        // Ensure podcast exists
+        await supabase.from('podcasts').upsert({
+          id: podcastId,
+          title: url || `YouTube ${videoId}`,
+          url: url || `https://www.youtube.com/watch?v=${videoId}`,
+          description: 'Live processed video',
+          user_id: demoUser
+        }).select('id').maybeSingle();
+
+        // Insert alerts
+        const rows = mappedAlerts.map(a => ({
+          podcast_id: podcastId,
+          user_id: demoUser,
+          alert_type: 'fact_check',
+          details: JSON.stringify({
+            claim: a.claim,
+            verdict: a.verdict,
+            reasoning: a.reasoning,
+            sources: a.sources,
+            timestamp: a.timestamp,
+            video_time_sec: a.video_time_sec
+          }),
+          urls: JSON.stringify(a.sources)
+        }));
+        await supabase.from('alerts').insert(rows);
+      } catch (persistErr) {
+        console.warn('⚠️  Live insert failed (non-fatal):', persistErr?.message || persistErr);
+      }
+    }
+
+    const elapsed = Date.now() - start;
+    return res.json({
+      success: true,
+      transcript: tr.text,
+      alerts: mappedAlerts,
+      duration: tr.duration,
+      processingTime: elapsed,
+      videoId
+    });
+  } catch (err) {
+    console.error('❌ /api/live/chunk failed:', err);
+    return res.status(500).json({ success: false, message: 'Live processing failed', error: err?.message || String(err) });
   }
 });
 

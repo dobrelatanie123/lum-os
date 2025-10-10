@@ -8,6 +8,7 @@ class LumosYouTubeMonitor {
     this.apiUrl = 'http://localhost:3001'; // API server
     this.chunkDuration = 10000; // 10 seconds chunks
     this.recordingTimer = null;
+    this.uploadInFlight = false;
     this.groupedTopics = [];
     this.firedTopicKeys = new Set();
     this.topicSchedulerId = null;
@@ -184,6 +185,10 @@ class LumosYouTubeMonitor {
 
   async processAudioChunk() {
     if (this.audioChunks.length === 0) return;
+    if (this.uploadInFlight) {
+      console.log('⏳ Upload in flight, skipping chunk');
+      return;
+    }
 
     try {
       // Convert chunks to blob
@@ -200,11 +205,19 @@ class LumosYouTubeMonitor {
       formData.append('audio', audioBlob, 'chunk.webm');
       formData.append('videoId', this.currentVideoId);
       formData.append('timestamp', Date.now().toString());
+      const video = document.querySelector('video');
+      const curSec = video ? Math.floor(video.currentTime || 0) : 0;
+      formData.append('videoTimeSec', String(curSec));
+      formData.append('url', window.location.href);
 
-      const response = await fetch(`${this.apiUrl}/api/transcribe/audio`, {
-        method: 'POST',
-        body: formData
-      });
+      this.uploadInFlight = true;
+      let response = null;
+      try {
+        response = await fetch(`${this.apiUrl}/api/live/chunk`, { method: 'POST', body: formData });
+      } catch (e) {
+        // Fallback to legacy path if live endpoint missing
+        response = await fetch(`${this.apiUrl}/api/transcribe/audio`, { method: 'POST', body: formData });
+      }
 
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`);
@@ -227,7 +240,7 @@ class LumosYouTubeMonitor {
         
         this.handleAdBlockerDetection();
       }
-    }
+    } finally { this.uploadInFlight = false; }
   }
 
   handleAdBlockerDetection() {
