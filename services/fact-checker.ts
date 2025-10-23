@@ -46,6 +46,8 @@ export class FactChecker {
   async analyzeTranscription(transcription: string, videoId: string): Promise<FactCheckResult> {
     try {
       console.log(`🔍 Starting fact-check analysis for video ${videoId}`);
+      // Reset context buffer for this videoId at the beginning of analysis
+      try { (this.claimBuilder as any).resetContext?.(videoId); } catch {}
       
       const result = await RetryHandler.withRetry(
         () => this.performFactCheck(transcription, videoId),
@@ -219,12 +221,12 @@ Be thorough but concise. Focus on claims that are most likely to be factually in
 
           // Fallback: if GPT didn't return usable URLs, canonicalize claim and perform academic search (top 10) and select best
           if (combinedSources.length === 0) {
-            try {
+              try {
               console.log('⚠️ No valid URLs from GPT; falling back to academic search…');
               const span = `${claimData.text || ''} ${claimData.analysis || ''}`.trim().slice(0, 400);
               let boostedQuery = span;
               try {
-                const canonical: CanonicalClaim | null = await this.claimBuilder.canonicalizeSpan(span);
+                const canonical: CanonicalClaim | null = await this.claimBuilder.canonicalizeSpan(span, undefined, videoId);
                 if (canonical) {
                   boostedQuery = this.claimBuilder.buildBoostedQuery(canonical);
                 }
