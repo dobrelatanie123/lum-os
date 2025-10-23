@@ -247,13 +247,18 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
         const podcastId = `yt-${videoId}`;
         const demoUser = process.env.DEMO_USER_ID || 'demo-user-123';
         // Ensure podcast exists
-        await supabase.from('podcasts').upsert({
+        const { data: upPodcast, error: upPodcastErr } = await supabase.from('podcasts').upsert({
           id: podcastId,
           title: url || `YouTube ${videoId}`,
           url: url || `https://www.youtube.com/watch?v=${videoId}`,
           description: 'Live processed video',
           user_id: demoUser
         }).select('id').maybeSingle();
+        if (upPodcastErr) {
+          console.warn('⚠️  Live upsert podcast error:', upPodcastErr.message);
+        } else {
+          console.log('✅ Live upsert podcast ok', { podcastId });
+        }
 
         // Insert alerts
         const rows = mappedAlerts.map(a => ({
@@ -270,7 +275,12 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
           }),
           urls: JSON.stringify(a.sources)
         }));
-        await supabase.from('alerts').insert(rows);
+        const { data: inserted, error: upErr } = await supabase.from('alerts').insert(rows).select('id');
+        if (upErr) {
+          console.warn('⚠️  Live insert alerts error:', upErr.message);
+        } else {
+          console.log('✅ Live insert alerts ok', { count: inserted?.length || 0, videoId });
+        }
       } catch (persistErr) {
         console.warn('⚠️  Live insert failed (non-fatal):', persistErr?.message || persistErr);
       }

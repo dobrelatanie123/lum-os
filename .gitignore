@@ -48,6 +48,3 @@ build/
 # Temporary folders
 tmp/
 temp/
-
-# AI and development tools
-.ai/
