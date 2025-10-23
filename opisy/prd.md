@@ -1,15 +1,3 @@
-Read file: /Users/maciejorlowski/lumos/.ai/prd.md
-
-Ran tool
-
-Read file: /Users/maciejorlowski/lumos/.ai/prd.md
-
-Read file: /Users/maciejorlowski/lumos/.ai/prd.md
-
-Poniżej znajduje się finalna treść dokumentu PRD, zgodna z wymaganym formatem, którą należy zapisać w pliku  
-/Users/maciejorlowski/lumos/.ai/prd.md:
-
-```markdown
 # Dokument wymagań produktu (PRD) - Lumos
 ## 1. Przegląd produktu
 Lumos to rozwiązanie służące do automatycznej weryfikacji informacji zawartych w podcastach publikowanych na YouTube. Aplikacja działa jako rozszerzenie przeglądarki (desktop-first) i wykrywa odtwarzanie treści na youtube.com przy użyciu whitelisty kanałów oraz kryterium długości wideo (minimum 60 minut). Po zebraniu metadanych (tytuł, kanał, timestamp) system w tle uruchamia proces transkrypcji audio (API OpenAI), ekstrakcji claimów oraz oceny ich wiarygodności na podstawie heurystyk (np. liczby, jednostki, nazwa badania, instytucja + rok). Wyniki analizy prezentowane są użytkownikowi poprzez natywne powiadomienia webowe, a kliknięcie powiadomienia otwiera szczegółowy widok z transkrypcją, markerem czasu oraz odnośnikami do źródeł. Produkt skierowany jest do casualowych, tech-savvy słuchaczy podcastów, korzystających z treści w językach angielskim i polskim.

@@ -1,0 +1,50 @@
+<conversation_summary>
+<decisions>
+1. Kluczowe widoki obejmują: ekran natywnych powiadomień (widok powiadomienia alertu), ekran listy alertów, ekran szczegółów alertu, ekran logowania i rejestracji (z resetem hasła oraz opcjonalnym logowaniem social, jeśli supabase oferuje), ekran edycji konta (głównie zmiana hasła) oraz ekran płatności (integracja Stripe do płatności kartą).  
+2. Nawigacja powinna umożliwiać przechodzenie z listy alertów do szczegółów alertu, a z każdego widoku umożliwiać łatwy dostęp do edycji konta.  
+3. Autoryzacja będzie realizowana przez supabase auth.  
+4. Interfejs musi być w pełni responsywny, przystosowany do przeglądarek opartych na Chromium (Chrome) oraz Safari.  
+5. Narzędzie do zarządzania stanem aplikacji ma być wybrane automatycznie (np. poprzez analizę nowoczesnych rozwiązań).  
+6. Interfejs będzie obsługiwał stany operacji (ładowanie, sukces, błąd) z odpowiednimi wskaźnikami wizualnymi.  
+7. Płatności będą implementowane z wykorzystaniem Stripe, umożliwiając podstawową obsługę płatności kartą.  
+8. Strategie buforowania danych oraz minimalizacji liczby zapytań do API pozostają do dalszej analizy.
+</decisions>
+<matched_recommendations>
+1. Zdefiniowanie widoku natywnych powiadomień oraz listy alertów z możliwością przejścia do szczegółów i zostawienia feedbacku.  
+2. Implementacja ekranów logowania i rejestracji z integracją supabase auth, uwzględniając reset hasła (oraz opcjonalne logowanie social, jeśli dostępne).  
+3. Zaprojektowanie ekranu edycji konta skoncentrowanego na zmianie hasła.  
+4. Integracja ekranu płatności ze Stripe dla obsługi transakcji kartą.  
+5. Zapewnienie spójnej nawigacji między wszystkimi widokami, umożliwiającej szybki dostęp do edycji konta.  
+6. Wdrożenie systemu obsługi stanów operacji (ładowanie, sukces, błąd) w interfejsie.  
+7. Zastosowanie pełnej responsywności i zgodności z przeglądarkami Chrome (Chromium) oraz Safari.  
+8. Wybór nowoczesnego narzędzia do zarządzania stanem aplikacji oraz analiza strategii buforowania i optymalizacji zapytań do API.
+</matched_recommendations>
+<ui_architecture_planning_summary>
+Główne wymagania dotyczące architektury UI MVP obejmują stworzenie następujących widoków:
+- Ekran natywnych powiadomień: wyświetlanie powiadomień alertów bezpośrednio w przeglądarce.
+- Ekran listy alertów: prosty widok bez filtrowania czy sortowania, z możliwością przejścia do szczegółów alertu oraz zostawienia feedbacku.
+- Ekran szczegółów alertu: prezentacja pełnych informacji o wybranym alercie.
+- Ekran logowania i rejestracji: integracja z supabase auth, umożliwiająca rejestrację, logowanie, reset hasła oraz opcjonalnie logowanie social (jeśli oferowane przez supabase).
+- Ekran edycji konta: skoncentrowany głównie na zmianie hasła.
+- Ekran płatności: integracja Stripe do obsługi płatności kartą.
+
+Kluczowe przepływy użytkownika obejmują:
+- Przejście z listy alertów do szczegółowego widoku alertu oraz widoku natywnych powiadomień.
+- Łatwy dostęp do ekranu edycji konta z każdego widoku aplikacji.
+- Proces rejestracji, logowania oraz resetu hasła zarządzany poprzez supabase auth.
+
+Strategia integracji z API i zarządzania stanem:
+- Każda asynchroniczna operacja będzie wspierana przez system obsługi stanów (ładowanie, sukces, błąd) z odpowiednimi wizualnymi wskaźnikami (np. spinnery, komunikaty błędów).
+- Zostanie wybrane nowoczesne narzędzie do zarządzania stanem aplikacji (np. Zustand lub alternatywa) w celu synchronizacji danych z API.
+- Planowane jest wdrożenie strategii buforowania danych (np. cache-first, stale-while-revalidate) oraz minimalizacji liczby zapytań do API, co pozostaje do dalszej analizy.
+
+Kwestie dotyczące responsywności, dostępności i bezpieczeństwa:
+- Interfejs musi być w pełni responsywny i zoptymalizowany dla przeglądarek opartych na Chromium (Chrome) oraz Safari.
+- Zostaną wdrożone standardy dostępności, zapewniając łatwy dostęp dla wszystkich użytkowników.
+- Bezpieczeństwo operacji płatniczych zostanie zapewnione przez integrację ze Stripe, a bezpieczeństwo sesji przez supabase auth.
+</ui_architecture_planning_summary>
+<unresolved_issues>
+1. Dobór konkretnego narzędzia do zarządzania stanem aplikacji – wymaga dalszej analizy i wyboru optymalnego rozwiązania.  
+2. Opracowanie strategii buforowania danych oraz minimalizacji liczby zapytań do API – pozostaje do dalszego zbadania i wdrożenia.
+</unresolved_issues>
+</conversation_summary>

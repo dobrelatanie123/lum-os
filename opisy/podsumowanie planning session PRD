@@ -1,0 +1,46 @@
+<conversation_summary>
+<decisions>
+1. Ustalono, że targetem MVP są casualowi, tech-savvy słuchacze podcastów, korzystający z treści w językach angielskim i polskim, bez ograniczeń regionalnych.
+2. Wykrywanie języka ma być automatyczne, z obsługą angielskiego i polskiego.
+3. Identyfikacja podcastów opiera się na whitelist'ie kanałów (channelId) oraz kryterium długości wideo (minimum 60 minut).
+4. Alerty mają być generowane dla twierdzeń zawierających odniesienia do badań lub liczb/statystyk, przy czym należy spełnić co najmniej 2 z 4 ustalonych kryteriów (liczby, jednostki, nazwa badania, instytucja+rok).
+5. Ustalono próg werdyktów: "potwierdzone" przy confidence ≥ 0.8, "wątpliwe" przy confidence ≥ 0.5.
+6. Alerty mają być generowane w tempie do 5 na minutę, z możliwością łączenia bliskich w czasie claimów (okno 120 sekund, maksymalnie 3 claimy w jednym alertie).
+7. Interfejs powiadomień ma opierać się na natywnych Web Notifications – decyzja wynika z obaw, że side-panel w Chrome może nie być szeroko stosowany.
+8. Działania w odpowiedzi na powiadomienia: kliknięcie otwiera szczegóły w nowej karcie; w widoku szczegółów zawarte będą marker czasu (link "Jump to t=...") bez automatycznego wstrzymywania odtwarzania.
+9. Weryfikacja źródeł ma korzystać z API akademickich (np. Semantic Scholar, PubMed) jako priorytet, z fallbackiem do Perplexity Academic i Google.
+10. Mechanizm feedbacku zbiera co najmniej 5 ocen na alert, a wyniki te agreguje do globalnej metryki jakości.
+11. Wdrożono mechanizm cache’owania rezultatów analizy dla danego videoId z TTL wynoszącym 30 dni – analiza ma być ponawiana przy zmianie długości wideo.
+12. Uwierzytelnianie użytkowników realizowane będzie metodą logowania przez email (magic link).
+13. Model rozliczeń zakłada freemium – pierwszy alert za darmo, kolejne alerty rozliczane w systemie usage-based z wykorzystaniem Stripe Checkout.
+14. MVP ma być wspierane głównie w przeglądarkach opartych na Chromium (Chrome, ewentualnie Safari).
+15. Analiza jest ograniczona do domeny youtube.com, co determinuje wykrywanie odtwarzania.
+16. Zabezpieczenia opierają się na prostym rate limiting na podstawie adresu IP, przy czym kryteria blokady muszą uwzględniać użytkowników z dynamicznymi adresami.
+17. Zarządzanie whitelistą jest na starcie wykonywane ręcznie.
+18. Transkrypcja realizowana będzie przy użyciu API OpenAI (STT), z chunkingiem o długości 20–30 sekund i overlapem 3–5 sekund.
+19. Docelowy koszt generowania alertu ustalono eksperymentalnie na poziomie około 0.03 USD.
+</decisions>
+
+<matched_recommendations>
+1. Utworzenie konfigurowalnej bazy słów kluczowych (np. "research", "study" oraz ich polskie odpowiedniki i synonimy) dostępnej przez panel administracyjny.
+2. Przeprowadzenie eksperymentalnych testów celem ustalenia kosztu alertu na poziomie około 0.03 USD.
+3. Implementacja prostego ograniczenia rate limiting opartego na adresie IP, z dalszą kalibracją progów.
+4. Pilotażowe testy SLO dla poszczególnych etapów (STT, retrieval, ocena, generowanie uzasadnień), umożliwiające dalsze dostrojenie systemu.
+5. Wykorzystanie gotowej integracji Stripe Checkout w MVP.
+6. Koncentracja na natywnych Web Notifications w MVP, rezygnując na starcie z dynamicznego side-panełu.
+7. Ręczne zarządzanie whitelistą na starcie, z perspektywą automatyzacji w przyszłości.
+8. Rozszerzenie systemu telemetrycznego o dodatkowe metryki, takie jak średni czas interakcji z alertami i wskaźnik odrzucenia.
+</matched_recommendations>
+
+<prd_planning_summary>
+Projekt Lumos (MVP) ma na celu weryfikację informacji zawartych w podcastach publikowanych na YouTube. Główne wymagania funkcjonalne obejmują automatyczną transkrypcję audio, identyfikację istotnych claimów na podstawie heurystyk (słowa kluczowe, odniesienia do badań i liczb), oraz generowanie alertów, które są prezentowane użytkownikowi poprzez natywne powiadomienia webowe. Użytkownikom umożliwione zostanie otwarcie szczegółowego widoku w nowej karcie, gdzie znajdą więcej informacji, w tym marker czasu, transkrypcję i linki do zweryfikowanych źródeł. Podstawową metodą identyfikacji podcastów będzie whitelist kanałów w połączeniu z kryterium długości wideo (min. 60 minut). System będzie gromadził feedback, co najmniej 5 ocen na alert, by móc kalibrować jakość wyników. Dodatkowo, rozwiązanie uwzględnia caching analiz na 30 dni oraz mechanizmy zabezpieczające przed nadużyciami – wykorzystanie rate limiting na podstawie adresu IP. Model rozliczeń opiera się na freemium (pierwszy alert za darmo, dalsze alerty płatne) z implementacją Stripe Checkout. Kluczowe historie użytkownika obejmują: automatyczne wykrywanie języka, selekcję treści na podstawie whitelisty i długości, generowanie alertów dla istotnych claimów oraz możliwość interakcji i oceny alertów. Kryteria sukcesu obejmują m.in. liczbę nowych użytkowników, którzy aktywują funkcjonalność analizy oraz wysoki procent trafności ocen alertów. 
+</prd_planning_summary>
+
+<unresolved_issues>
+1. Dokładne progi rate limiting oparte na adresie IP – ustalenie, jakie limity nie będą blokować uczciwych użytkowników z dynamicznymi adresami.
+2. Szczegółowe ustalenie SLO dla poszczególnych etapów przetwarzania (STT, retrieval, ocena, generowanie uzasadnień) wymaga pilotażowych testów.
+3. Potrzeba dalszych badań nad integracją i ewentualnymi ograniczeniami API akademickich w kontekście fallbacku do wyszukiwania ogólnego.
+4. W dalszej mierze określenie kosztów operacyjnych (np. wybór alternatywnych modeli STT) w celu potwierdzenia docelowego kosztu alertu.
+5. Dalsze ustalenia dotyczące UI/UX, w tym potencjalne eksperymenty z dynamicznym side-panelem, które mogą zostać wdrożone w przyszłych iteracjach produktu.
+</unresolved_issues>
+</conversation_summary>
