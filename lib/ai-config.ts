@@ -22,6 +22,9 @@ export const AI_CONFIG = {
     maxTokens: 2000,
     temperature: 0.3,
   },
+  claims: {
+    contextWindowChunks: parseInt(process.env.CLAIMS_CONTEXT_WINDOW_CHUNKS || '5'),
+  },
   limits: {
     rateLimit: parseInt(process.env.RATE_LIMIT_PER_MINUTE || '50'),
     costLimit: parseFloat(process.env.COST_LIMIT_PER_DAY || '10.00'),
@@ -52,6 +55,10 @@ export function validateAIConfig(): void {
 
   if (AI_CONFIG.limits.costLimit <= 0) {
     throw new Error('COST_LIMIT_PER_DAY must be greater than 0');
+  }
+
+  if (AI_CONFIG.claims.contextWindowChunks <= 0) {
+    throw new Error('CLAIMS_CONTEXT_WINDOW_CHUNKS must be greater than 0');
   }
 }
 

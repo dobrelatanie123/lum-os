@@ -20,6 +20,11 @@ export class ClaimBuilder {
     const openaiConfig: any = { apiKey: AI_CONFIG.openai.apiKey };
     if (AI_CONFIG.openai.organization) openaiConfig.organization = AI_CONFIG.openai.organization;
     this.openai = new OpenAI(openaiConfig);
+    // Initialize window from config
+    if ((AI_CONFIG as any).claims?.contextWindowChunks) {
+      const n = Number((AI_CONFIG as any).claims.contextWindowChunks);
+      if (Number.isFinite(n) && n > 0) this.contextWindowChunks = Math.floor(n);
+    }
   }
 
   async canonicalizeSpan(span: string, videoYear?: number, contextId?: string): Promise<CanonicalClaim | null> {
