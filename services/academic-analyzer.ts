@@ -30,7 +30,7 @@ export class AcademicAnalyzerService {
       console.log(`🔍 Analyzing ${searchResults.length} academic results for claim: "${claim.substring(0, 50)}..."`);
       
       const response = await this.openai.chat.completions.create({
-        model: 'o1-preview',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',

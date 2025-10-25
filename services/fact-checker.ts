@@ -82,8 +82,7 @@ export class FactChecker {
             model: 'gpt-5',
             tools: [ { type: 'web_search' } ],
             input,
-            temperature: 0.3,
-            // Responses API uses max_output_tokens
+            // temperature not supported by this model in Responses API
             max_output_tokens: 4000
           });
 
@@ -155,7 +154,7 @@ IMPORTANT INSTRUCTIONS:
 5. Use web search to find real academic sources and studies that support or refute the claims
 6. Only include sources that you can verify exist and are accessible through web search
 
-RESPONSE FORMAT:
+RESPONSE FORMAT (OUTPUT ONLY JSON, NO PROSE, NO MARKDOWN):
 Return a JSON object with the following structure:
 {
   "overallCredibility": "high|medium|low",
@@ -182,7 +181,7 @@ Return a JSON object with the following structure:
   "recommendations": ["recommendation 1", "recommendation 2"]
 }
 
-Be thorough but concise. Focus on claims that are most likely to be factually incorrect or misleading.`;
+Be thorough but concise. Only return the JSON object and nothing else.`;
   }
 
   /**
@@ -196,7 +195,17 @@ Be thorough but concise. Focus on claims that are most likely to be factually in
         throw new Error('No JSON found in GPT response');
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      // Harden JSON extraction: support fenced blocks and loose prose
+      let jsonText = content;
+      const fenced = content.match(/```json[\s\S]*?```/i) || content.match(/```[\s\S]*?```/);
+      if (fenced) {
+        jsonText = fenced[0].replace(/```json|```/gi, '').trim();
+      }
+      const jsonMatch2 = jsonText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch2) {
+        throw new Error('No JSON found in GPT response');
+      }
+      const parsed = JSON.parse(jsonMatch2[0]);
       
       // Process claims and find studies for each
       const claims: Claim[] = [];
