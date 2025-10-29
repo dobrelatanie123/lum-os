@@ -258,8 +258,14 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
     );
     await costTracker.trackWhisperCost(tr.duration, 'transcription');
 
-    // Fact-check the transcription text
-    const fc = await factChecker.analyzeTranscription(tr.text, videoId);
+    // Fact-check the transcription text (best-effort; do not fail the whole request)
+    let fc = null;
+    try {
+      fc = await factChecker.analyzeTranscription(tr.text, videoId);
+    } catch (fcErr) {
+      console.warn('⚠️  Fact-check failed for live chunk (continuing with transcript only):', fcErr?.message || fcErr);
+      fc = { claims: [], overallCredibility: 'unknown' };
+    }
 
     // Map GPT claims -> alert items expected by extension/background
     const credibilityToVerdict = (c) => {
