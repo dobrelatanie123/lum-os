@@ -122,19 +122,12 @@ class LumosYouTubeMonitor {
         }
       }
 
-      // Fallback to getUserMedia for microphone
-      console.log('🎤 Fallback to getUserMedia...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000, // Whisper prefers 16kHz
-          sampleSize: 16,
-          echoCancellation: false,
-          noiseSuppression: false
-        }
-      });
-
-      this.setupRecorder(stream);
+      // Fallback: request background tab audio capture (no mic prompt)
+      console.log('🔊 Requesting background tab audio capture…');
+      await chrome.runtime.sendMessage({ type: 'START_RECORDING_BG', videoId: this.currentVideoId });
+      this.isRecording = true;
+      this.updateBadge('REC');
+      return;
       
     } catch (error) {
       console.error('❌ Failed to start recording:', error);
@@ -212,15 +205,20 @@ class LumosYouTubeMonitor {
 
       this.uploadInFlight = true;
       let response = null;
+      // Try live endpoint first
       try {
         response = await fetch(`${this.apiUrl}/api/live/chunk`, { method: 'POST', body: formData });
-      } catch (e) {
-        // Fallback to legacy path if live endpoint missing
-        response = await fetch(`${this.apiUrl}/api/transcribe/audio`, { method: 'POST', body: formData });
+      } catch {}
+      // If live failed or returned non-OK, try fallback transcription endpoint
+      if (!response || !response.ok) {
+        try {
+          response = await fetch(`${this.apiUrl}/api/transcribe/audio`, { method: 'POST', body: formData });
+        } catch {}
       }
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+      if (!response || !response.ok) {
+        const status = response ? response.status : 'fetch_failed';
+        throw new Error(`API error: ${status}`);
       }
 
       const result = await response.json();
@@ -317,6 +315,7 @@ class LumosYouTubeMonitor {
       this.mediaRecorder = null;
     }
 
+    try { chrome.runtime.sendMessage({ type: 'STOP_RECORDING_BG', videoId: this.currentVideoId }); } catch {}
     this.updateBadge('');
     console.log('✅ Recording fully stopped');
   }
@@ -341,6 +340,14 @@ class LumosYouTubeMonitor {
           videoId: this.currentVideoId,
           url: location.href
         });
+        break;
+      case 'GET_TIME':
+        try {
+          const v = document.querySelector('video');
+          sendResponse({ timeSec: Math.floor(v ? (v.currentTime || 0) : 0) });
+        } catch {
+          sendResponse({ timeSec: 0 });
+        }
         break;
         
       default:

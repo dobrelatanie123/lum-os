@@ -10,6 +10,8 @@ class LumosBackground {
     this.lastAutoOpenAt = 0;
     this.autoOpenCooldownMs = 8000;
     this.prevTopicCounts = new Map(); // videoId -> last seen grouped count
+    // Added: background recorders state for tab audio capture
+    this.bgRecorders = new Map(); // videoId -> { recorder, stream, tabId, timer }
     this.init();
   }
 
@@ -117,6 +119,18 @@ class LumosBackground {
 
       case 'STOP_POLL':
         this.stopPolling(message.videoId);
+        sendResponse({ success: true });
+        break;
+
+      // Added: background tab audio capture control (no mic prompt)
+      case 'START_RECORDING_BG':
+        this.startBackgroundCapture(sender.tab?.id, message.videoId)
+          .then(() => sendResponse({ success: true }))
+          .catch(() => sendResponse({ success: false }));
+        return true;
+
+      case 'STOP_RECORDING_BG':
+        this.stopBackgroundCapture(message.videoId);
         sendResponse({ success: true });
         break;
 
@@ -268,7 +282,7 @@ class LumosBackground {
       const url = chrome.runtime.getURL('popup.html');
       try {
         const cur = await chrome.tabs.query({ active: true, currentWindow: true });
-        const created = await chrome.tabs.create({ url, index: (cur[0]?.index || 0) + 1, active: true });
+        await chrome.tabs.create({ url, index: (cur[0]?.index || 0) + 1, active: true });
         return;
       } catch (eTab) {
         console.warn('openPopupRobust: tabs.create preferred path failed', eTab, chrome.runtime.lastError);
@@ -455,6 +469,78 @@ class LumosBackground {
       }
       return [];
     } catch { return []; }
+  }
+
+  // Added: background tab audio capture helpers
+  async startBackgroundCapture(tabId, videoId) {
+    try {
+      if (!tabId || !videoId) return;
+      if (this.bgRecorders.has(videoId)) return;
+      console.log('🎧 Starting background tabCapture', { tabId, videoId });
+      const stream = await chrome.tabCapture.capture({ audio: true, video: false, consumerTabId: tabId });
+      if (!stream) throw new Error('tabCapture returned null');
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      let chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.onstop = async () => { try { await this.uploadChunk(chunks.splice(0), videoId, tabId); } catch {} };
+      recorder.start();
+      const timer = setInterval(() => {
+        try {
+          if (recorder.state === 'recording') {
+            recorder.stop();
+            setTimeout(() => { try { if (recorder.state !== 'recording') recorder.start(); } catch {} }, 120);
+          }
+        } catch {}
+      }, 10000);
+      this.bgRecorders.set(videoId, { recorder, stream, tabId, timer });
+    } catch (e) {
+      console.warn('tabCapture start failed', e?.message || e);
+    }
+  }
+
+  stopBackgroundCapture(videoId) {
+    const st = this.bgRecorders.get(videoId);
+    if (!st) return;
+    try { clearInterval(st.timer); } catch {}
+    try { if (st.recorder && st.recorder.state !== 'inactive') st.recorder.stop(); } catch {}
+    try { if (st.stream) st.stream.getTracks().forEach(t => t.stop()); } catch {}
+    this.bgRecorders.delete(videoId);
+    console.log('🛑 Stopped background tabCapture', videoId);
+  }
+
+  async uploadChunk(blobParts, videoId, tabId) {
+    try {
+      if (!blobParts || !blobParts.length) return;
+      const blob = new Blob(blobParts, { type: 'audio/webm' });
+      if (blob.size < 1000) return;
+      let timeSec = 0;
+      try {
+        const resp = await chrome.tabs.sendMessage(tabId, { type: 'GET_TIME' });
+        if (Number.isFinite(resp?.timeSec)) timeSec = resp.timeSec;
+      } catch {}
+      const form = new FormData();
+      form.append('audio', blob, 'chunk.webm');
+      form.append('videoId', videoId);
+      form.append('videoTimeSec', String(timeSec));
+      form.append('url', `https://www.youtube.com/watch?v=${videoId}`);
+      let res = null;
+      try {
+        res = await fetch('http://localhost:3001/api/live/chunk', { method: 'POST', body: form });
+      } catch {}
+      if (!res || !res.ok) {
+        try {
+          res = await fetch('http://localhost:3001/api/transcribe/audio', { method: 'POST', body: form });
+        } catch {}
+      }
+      if (!res || !res.ok) return;
+      const result = await res.json();
+      if (result?.success && Array.isArray(result.alerts) && result.alerts.length) {
+        console.log('📬 Live alerts received in background:', result.alerts.length);
+        this.handleAlertsDetected({ alerts: result.alerts, transcript: result.transcript, videoId, timestamp: Date.now() }, { id: tabId, url: `https://www.youtube.com/watch?v=${videoId}` });
+      }
+    } catch (e) {
+      console.warn('uploadChunk failed', e?.message || e);
+    }
   }
 
   async handleAdBlockerDetection(message, tab) {
