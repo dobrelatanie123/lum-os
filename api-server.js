@@ -242,7 +242,7 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
     }).filter(a => a.claim) : [];
 
     // Best-effort persistence to Supabase
-    if (supabase && mappedAlerts.length) {
+    if (supabase) {
       try {
         const podcastId = `yt-${videoId}`;
         const demoUser = process.env.DEMO_USER_ID || 'demo-user-123';
@@ -260,26 +260,56 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
           console.log('✅ Live upsert podcast ok', { podcastId });
         }
 
-        // Insert alerts
-        const rows = mappedAlerts.map(a => ({
-          podcast_id: podcastId,
-          user_id: demoUser,
-          alert_type: 'fact_check',
-          details: JSON.stringify({
-            claim: a.claim,
-            verdict: a.verdict,
-            reasoning: a.reasoning,
-            sources: a.sources,
-            timestamp: a.timestamp,
-            video_time_sec: a.video_time_sec
-          }),
-          urls: JSON.stringify(a.sources)
-        }));
-        const { data: inserted, error: upErr } = await supabase.from('alerts').insert(rows).select('id');
-        if (upErr) {
-          console.warn('⚠️  Live insert alerts error:', upErr.message);
-        } else {
-          console.log('✅ Live insert alerts ok', { count: inserted?.length || 0, videoId });
+        // Upsert/append transcript text for this podcast
+        try {
+          const { data: existingT, error: tSelErr } = await supabase
+            .from('transcriptions')
+            .select('id, transcript')
+            .eq('podcast_id', podcastId)
+            .maybeSingle();
+          if (tSelErr) {
+            console.warn('⚠️  Live select transcription error:', tSelErr.message);
+          }
+          let newTranscript = String(tr.text || '').trim();
+          if (existingT && existingT.transcript) {
+            const appended = `${existingT.transcript}\n${newTranscript}`.trim();
+            // Safety cap to avoid unbounded growth in dev
+            newTranscript = appended.slice(0, 500000);
+          }
+          const { error: tUpErr } = await supabase
+            .from('transcriptions')
+            .upsert({ podcast_id: podcastId, transcript: newTranscript }, { onConflict: 'podcast_id' });
+          if (tUpErr) {
+            console.warn('⚠️  Live upsert transcription error:', tUpErr.message);
+          } else {
+            console.log('🗂️  Live transcription saved/updated');
+          }
+        } catch (tErr) {
+          console.warn('⚠️  Live transcription persist failed:', tErr?.message || tErr);
+        }
+
+        // Insert alerts (if any)
+        if (mappedAlerts.length) {
+          const rows = mappedAlerts.map(a => ({
+            podcast_id: podcastId,
+            user_id: demoUser,
+            alert_type: 'fact_check',
+            details: JSON.stringify({
+              claim: a.claim,
+              verdict: a.verdict,
+              reasoning: a.reasoning,
+              sources: a.sources,
+              timestamp: a.timestamp,
+              video_time_sec: a.video_time_sec
+            }),
+            urls: JSON.stringify(a.sources)
+          }));
+          const { data: inserted, error: upErr } = await supabase.from('alerts').insert(rows).select('id');
+          if (upErr) {
+            console.warn('⚠️  Live insert alerts error:', upErr.message);
+          } else {
+            console.log('✅ Live insert alerts ok', { count: inserted?.length || 0, videoId });
+          }
         }
       } catch (persistErr) {
         console.warn('⚠️  Live insert failed (non-fatal):', persistErr?.message || persistErr);
