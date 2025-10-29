@@ -156,6 +156,43 @@ app.post('/api/transcribe/audio', upload.single('audio'), async (req, res) => {
     };
 
     console.log(`✅ Transcription completed: ${transcriptionResult.text.substring(0, 100)}... (${transcriptionResult.processingTime}ms, $${transcriptionResult.cost.toFixed(4)})`);
+
+    // Best-effort persist to Supabase as well (fallback path used by extension)
+    if (supabase) {
+      try {
+        const podcastId = `yt-${videoId}`;
+        const demoUser = process.env.DEMO_USER_ID || 'demo-user-123';
+        const { error: upPodcastErr } = await supabase.from('podcasts').upsert({
+          id: podcastId,
+          title: `YouTube ${videoId}`,
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          description: 'Live processed video',
+          user_id: demoUser
+        }).select('id').maybeSingle();
+        if (upPodcastErr) console.warn('⚠️  Fallback upsert podcast error:', upPodcastErr.message);
+
+        const { data: existingT, error: tSelErr } = await supabase
+          .from('transcriptions')
+          .select('id, transcript')
+          .eq('podcast_id', podcastId)
+          .maybeSingle();
+        if (tSelErr) console.warn('⚠️  Fallback select transcription error:', tSelErr.message);
+
+        let newTranscript = String(transcriptionResult.text || '').trim();
+        if (existingT?.transcript) {
+          const appended = `${existingT.transcript}\n${newTranscript}`.trim();
+          newTranscript = appended.slice(0, 500000);
+        }
+        const { error: tUpErr } = await supabase
+          .from('transcriptions')
+          .upsert({ podcast_id: podcastId, transcript: newTranscript }, { onConflict: 'podcast_id' });
+        if (tUpErr) console.warn('⚠️  Fallback upsert transcription error:', tUpErr.message);
+        else console.log('🗂️  Fallback transcription saved/updated');
+      } catch (e) {
+        console.warn('⚠️  Fallback transcription persist failed:', e?.message || e);
+      }
+    }
+
     res.json(response);
 
   } catch (error) {
@@ -191,6 +228,16 @@ app.post('/api/transcribe/audio', upload.single('audio'), async (req, res) => {
 // Live: one-shot chunk → transcription → fact-check → persist (best-effort)
 app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
   try {
+    // Log incoming live chunk details
+    try {
+      const { videoId: vid, videoTimeSec: vts } = req.body || {};
+      console.log('➡️  /api/live/chunk', {
+        videoId: vid,
+        videoTimeSec: vts,
+        originalname: req.file?.originalname,
+        size: req.file?.size
+      });
+    } catch {}
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No audio file provided' });
     }
@@ -317,6 +364,9 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
     }
 
     const elapsed = Date.now() - start;
+    try {
+      console.log('⬅️  /api/live/chunk done', { videoId, elapsed, alerts: mappedAlerts.length, transcriptLen: (tr.text || '').length });
+    } catch {}
     return res.json({
       success: true,
       transcript: tr.text,
