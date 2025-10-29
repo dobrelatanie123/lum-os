@@ -257,6 +257,7 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
       1000
     );
     await costTracker.trackWhisperCost(tr.duration, 'transcription');
+    try { console.log('🎤 Live transcription ok', { len: (tr.text || '').length, duration: tr.duration }); } catch {}
 
     // Fact-check the transcription text (best-effort; do not fail the whole request)
     let fc = null;
@@ -383,7 +384,7 @@ app.post('/api/live/chunk', upload.single('audio'), async (req, res) => {
     });
   } catch (err) {
     console.error('❌ /api/live/chunk failed:', err);
-    return res.status(500).json({ success: false, message: 'Live processing failed', error: err?.message || String(err) });
+    return res.status(200).json({ success: false, message: 'Live processing failed', error: err?.message || String(err) });
   }
 });
 
