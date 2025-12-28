@@ -21,7 +21,7 @@ export class AcademicSearchService {
 
   constructor() {
     this.apiKey = process.env.GOOGLE_SEARCH_API_KEY || '';
-    this.searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID || '';
+    this.searchEngineIdwh = process.env.GOOGLE_SEARCH_ENGINE_ID || '';
     
     if (!this.apiKey || !this.searchEngineId) {
       console.warn('⚠️ Google Search API not configured. Academic search will be limited.');

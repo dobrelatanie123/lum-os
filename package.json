@@ -13,6 +13,7 @@
     "check-costs": "node -e \"import('./lib/cost-tracker.js').then(m => m.getDailyCosts())\""
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.55.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",

@@ -30,10 +30,11 @@ export class YouTubeProcessor {
 
   /**
    * Process a YouTube video through the complete AI pipeline
+   * @param transcribeOnly - Skip GPT fact-checking, just transcribe (faster)
    */
-  async processVideo(videoUrl: string, videoId: string): Promise<{
+  async processVideo(videoUrl: string, videoId: string, transcribeOnly: boolean = false): Promise<{
     transcription: TranscriptionResult;
-    factCheck: FactCheckResult;
+    factCheck: FactCheckResult | null;
     totalCost: number;
     processingTime: number;
   }> {
@@ -41,7 +42,7 @@ export class YouTubeProcessor {
     let audioPath: string | null = null;
 
     try {
-      console.log(`🎥 Processing YouTube video: ${videoId}`);
+      console.log(`🎥 Processing YouTube video: ${videoId}${transcribeOnly ? ' (transcript only)' : ''}`);
       console.log(`🔗 URL: ${videoUrl}`);
 
       // Step 1: Extract audio from YouTube video
@@ -52,18 +53,23 @@ export class YouTubeProcessor {
       console.log('🎤 Transcribing audio with Whisper...');
       const transcription = await this.audioProcessor.transcribeAudio(
         fs.readFileSync(audioPath),
-        `${videoId}.webm`
+        `${videoId}.mp3`
       );
 
-      // Step 3: Fact-check the transcription using GPT-4
-      console.log('🔍 Analyzing transcription for fact-checking...');
-      const factCheck = await this.factChecker.analyzeTranscription(
-        transcription.text,
-        videoId
-      );
+      let factCheck: FactCheckResult | null = null;
+      let totalCost = transcription.cost;
+
+      // Step 3: Fact-check the transcription using GPT-4 (skip if transcribeOnly)
+      if (!transcribeOnly) {
+        console.log('🔍 Analyzing transcription for fact-checking...');
+        factCheck = await this.factChecker.analyzeTranscription(
+          transcription.text,
+          videoId
+        );
+        totalCost += factCheck.cost;
+      }
 
       const processingTime = Date.now() - startTime;
-      const totalCost = transcription.cost + factCheck.cost;
 
       console.log(`✅ Video processing completed in ${processingTime}ms`);
       console.log(`💰 Total cost: $${totalCost.toFixed(4)}`);
@@ -100,9 +106,11 @@ export class YouTubeProcessor {
       
       // Check if yt-dlp is available
       const ytdlp = spawn('yt-dlp', [
+        '--js-runtimes', 'node', // Required for YouTube JS challenges
         '--extract-audio',
         '--audio-format', 'mp3',
-        '--audio-quality', '0', // Best quality
+        '--audio-quality', '5', // Medium quality to keep under 25MB Whisper limit
+        '--postprocessor-args', 'ffmpeg:-ar 16000 -ac 1', // 16kHz mono for smaller file
         '--output', audioPath,
         videoUrl
       ], {

@@ -91,6 +91,7 @@ app.get('/', (req, res) => {
     status: 'ok',
     endpoints: {
       health: '/api/health',
+      analyze: '/api/analyze (NEW - Gemini 3 Flash)',
       transcribe: '/api/transcribe/audio',
       factCheck: '/api/fact-check',
       processYouTube: '/api/process-youtube',
@@ -488,9 +489,10 @@ app.get('/api/alerts/for-video', async (req, res) => {
 });
 
 // YouTube video processing endpoint
+// Pass transcribeOnly=true for faster processing (skips GPT fact-checking)
 app.post('/api/process-youtube', async (req, res) => {
   try {
-    const { videoUrl, videoId } = req.body;
+    const { videoUrl, videoId, transcribeOnly } = req.body;
     
     if (!videoUrl || !videoId) {
       return res.status(400).json({
@@ -499,7 +501,8 @@ app.post('/api/process-youtube', async (req, res) => {
       });
     }
 
-    console.log(`🎥 Processing YouTube video: ${videoId}`);
+    const fastMode = transcribeOnly === true;
+    console.log(`🎥 Processing YouTube video: ${videoId}${fastMode ? ' (FAST MODE - transcript only)' : ''}`);
     
     // Check dependencies first
     const depsAvailable = await youtubeProcessor.checkDependencies();
@@ -510,7 +513,34 @@ app.post('/api/process-youtube', async (req, res) => {
       });
     }
 
-    const result = await youtubeProcessor.processVideo(videoUrl, videoId);
+    const result = await youtubeProcessor.processVideo(videoUrl, videoId, fastMode);
+    
+    // Save to Supabase
+    if (supabase) {
+      try {
+        const podcastId = `yt-${videoId}`;
+        const demoUser = process.env.DEMO_USER_ID || 'demo-user-123';
+        
+        // Upsert podcast record
+        await supabase.from('podcasts').upsert({
+          id: podcastId,
+          title: `YouTube ${videoId}`,
+          url: videoUrl,
+          description: fastMode ? 'Transcript only' : (result.factCheck?.summary || 'Processed video'),
+          user_id: demoUser
+        }, { onConflict: 'id' });
+        
+        // Save transcription
+        await supabase.from('transcriptions').upsert({
+          podcast_id: podcastId,
+          transcript: result.transcription.text
+        }, { onConflict: 'podcast_id' });
+        
+        console.log(`💾 Saved to Supabase: ${podcastId}`);
+      } catch (dbErr) {
+        console.warn('⚠️ Supabase save failed:', dbErr?.message || dbErr);
+      }
+    }
     
     res.json({
       success: true,
@@ -609,6 +639,225 @@ app.get('/api/status', (req, res) => {
       message: 'Failed to get service status',
       error: error.message
     });
+  }
+});
+
+// ============================================================
+// Gemini 3 Flash - Video Analysis
+// ============================================================
+
+let geminiExtractor = null;
+let hybridProcessor = null;
+
+async function getGeminiExtractor() {
+  if (!geminiExtractor) {
+    const { GeminiExtractor } = await import('./services/claim-extraction/gemini-extractor.js');
+    geminiExtractor = new GeminiExtractor();
+  }
+  return geminiExtractor;
+}
+
+async function getHybridProcessor() {
+  if (!hybridProcessor) {
+    const { HybridProcessor } = await import('./services/claim-extraction/hybrid-processor.js');
+    hybridProcessor = new HybridProcessor();
+  }
+  return hybridProcessor;
+}
+
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const { youtube_url } = req.body;
+    
+    if (!youtube_url) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing youtube_url parameter'
+      });
+    }
+    
+    // Validate YouTube URL
+    const videoIdMatch = youtube_url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    if (!videoIdMatch) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid YouTube URL'
+      });
+    }
+    
+    const videoId = `yt-${videoIdMatch[1]}`;
+    console.log(`\n🎬 Analyzing video: ${youtube_url}`);
+    
+    // Get Gemini extractor
+    const extractor = await getGeminiExtractor();
+    
+    // Extract claims directly from YouTube URL
+    const { videoTitle, claims, processingTime } = await extractor.extractFromYouTube(youtube_url);
+    
+    console.log(`✅ Extracted ${claims.length} claims in ${(processingTime / 1000).toFixed(1)}s`);
+    
+    // Optionally save to database
+    if (supabase && claims.length > 0) {
+      try {
+        // Save podcast entry
+        await supabase.from('podcasts').upsert({
+          id: videoId,
+          title: videoTitle,
+          source_url: youtube_url,
+          status: 'analyzed'
+        }, { onConflict: 'id' });
+        
+        // Save claims
+        for (const claim of claims) {
+          await supabase.from('claims').upsert({
+            claim_id: claim.claim_id,
+            video_id: claim.video_id,
+            segment_text: claim.segment.full_text,
+            segment_word_count: claim.segment.word_count,
+            author_mentioned: claim.extraction.author_mentioned,
+            author_normalized: claim.extraction.author_normalized,
+            author_variants: claim.extraction.author_variants,
+            institution_mentioned: claim.extraction.institution_mentioned,
+            finding_summary: claim.extraction.finding_summary,
+            confidence: claim.extraction.confidence,
+            primary_query: claim.search.primary_query,
+            fallback_queries: claim.search.fallback_queries
+          }, { onConflict: 'claim_id' });
+        }
+        
+        console.log(`💾 Saved ${claims.length} claims to database`);
+      } catch (dbError) {
+        console.warn('⚠️ Failed to save to database:', dbError.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        video_id: videoId,
+        video_title: videoTitle,
+        video_url: youtube_url,
+        claims_count: claims.length,
+        claims: claims.map(c => ({
+          timestamp: c.timestamp,
+          segment: c.segment.full_text,
+          author: c.extraction.author_normalized || c.extraction.author_mentioned,
+          institution: c.extraction.institution_mentioned,
+          finding: c.extraction.finding_summary,
+          confidence: c.extraction.confidence,
+          search_queries: c.search
+        })),
+        processing_time_ms: processingTime
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Video analysis failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Video analysis failed',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================
+// Hybrid Processing - Real-time alerts for long podcasts
+// Fast track (first 10 min) + Background (full video)
+// ============================================================
+
+// Start hybrid processing (call when video starts playing)
+app.post('/api/video/start', async (req, res) => {
+  try {
+    const { youtube_url } = req.body;
+    
+    if (!youtube_url) {
+      return res.status(400).json({ success: false, message: 'Missing youtube_url' });
+    }
+    
+    const processor = await getHybridProcessor();
+    const videoId = await processor.startProcessing(youtube_url);
+    
+    res.json({
+      success: true,
+      data: {
+        video_id: videoId,
+        message: 'Processing started. Poll /api/video/claims for results.'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Failed to start video processing:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get processing status
+app.get('/api/video/status/:videoId', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const processor = await getHybridProcessor();
+    const status = processor.getStatus(videoId);
+    
+    if (!status) {
+      return res.status(404).json({ success: false, message: 'Video not found' });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        video_id: status.videoId,
+        status: status.status,
+        fast_track_complete: status.fastTrackCompletedAt !== null,
+        full_processing_complete: status.fullProcessingCompletedAt !== null,
+        fast_track_claims_count: status.fastTrackClaims.length,
+        total_claims_count: status.allClaims.length,
+        error: status.error
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get claims up to current playback position
+app.get('/api/video/claims/:videoId', async (req, res) => {
+  try {
+    const { videoId } = req.params;
+    const { timestamp } = req.query; // e.g., "05:30" or "1:23:45"
+    
+    const processor = await getHybridProcessor();
+    const status = processor.getStatus(videoId);
+    
+    if (!status) {
+      return res.status(404).json({ success: false, message: 'Video not found' });
+    }
+    
+    // If timestamp provided, filter claims up to that point
+    const claims = timestamp 
+      ? processor.getClaimsUpTo(videoId, timestamp)
+      : (status.allClaims.length > 0 ? status.allClaims : status.fastTrackClaims);
+    
+    res.json({
+      success: true,
+      data: {
+        video_id: videoId,
+        status: status.status,
+        claims_count: claims.length,
+        claims: claims.map(c => ({
+          timestamp: c.timestamp,
+          segment: c.segment.full_text,
+          author: c.extraction.author_normalized || c.extraction.author_mentioned,
+          finding: c.extraction.finding_summary,
+          confidence: c.extraction.confidence,
+          search_queries: c.search
+        }))
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

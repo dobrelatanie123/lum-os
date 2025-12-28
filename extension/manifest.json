@@ -9,7 +9,8 @@
     "notifications",
     "storage",
     "background",
-    "tabs"
+    "tabs",
+    "tabCapture"
   ],
   
   "host_permissions": [

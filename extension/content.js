@@ -1,49 +1,68 @@
-// Content script for YouTube pages
+// Content script for YouTube pages - Hybrid Mode (Gemini 3 Flash)
 class LumosYouTubeMonitor {
   constructor() {
-    this.isRecording = false;
-    this.mediaRecorder = null;
-    this.audioChunks = [];
     this.currentVideoId = null;
-    this.apiUrl = 'http://localhost:3001'; // API server
-    this.chunkDuration = 10000; // 10 seconds chunks
-    this.recordingTimer = null;
-    this.uploadInFlight = false;
-    this.groupedTopics = [];
-    this.firedTopicKeys = new Set();
-    this.topicSchedulerId = null;
+    this.apiUrl = 'http://localhost:3001';
+    this.pollInterval = null;
+    this.shownClaimIds = new Set();
+    this.isProcessing = false;
+    this.allClaims = []; // Store all claims from API
+    this.lastCheckTime = -1; // Track video time for triggering alerts
     
     this.init();
   }
 
   init() {
-    console.log('🔍 Lumos YouTube Monitor initialized');
+    console.log('🔍 Lumos YouTube Monitor initialized (Hybrid Mode)');
     
-    // Monitor for video changes
     this.observeVideoChanges();
-    
-    // Check current video
     this.checkCurrentVideo();
     
-    // Listen for messages from popup
+    // Also watch for video play event to trigger analysis
+    this.watchVideoPlay();
+    
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       this.handleMessage(message, sendResponse);
-      return true; // Keep response channel open
+      return true;
     });
 
-    // Listen for background updates to grouped topics and refresh scheduler
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message?.type === 'GROUPED_TOPICS_UPDATED' && message.videoId === this.currentVideoId) {
-        this.fetchGroupedTopics().then(() => this.startTopicScheduler());
-      }
-    });
-
-    // Prepare toast host early for stricter CSP pages
     try { this.ensureToastHost(); } catch {}
   }
 
+  watchVideoPlay() {
+    // YouTube loads video element dynamically, so we need to watch for it
+    const setupPlayListener = () => {
+      const video = document.querySelector('video');
+      if (video && !video._lumosWatching) {
+        video._lumosWatching = true;
+        
+        video.addEventListener('play', () => {
+          console.log('▶️ Video play detected');
+          if (!this.isProcessing && this.currentVideoId) {
+            chrome.storage.sync.get(['autoAnalyze'], (result) => {
+              if (result.autoAnalyze !== false) {
+                console.log('🚀 Auto-starting analysis on play...');
+                this.startHybridProcessing();
+              }
+            });
+          }
+        });
+        
+        console.log('👀 Video play listener attached');
+      }
+    };
+
+    // Try immediately and also observe for video element
+    setupPlayListener();
+    
+    const observer = new MutationObserver(() => {
+      setupPlayListener();
+    });
+    
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
   observeVideoChanges() {
-    // YouTube is SPA, so we need to monitor URL changes
     let currentUrl = location.href;
     
     const observer = new MutationObserver(() => {
@@ -54,43 +73,38 @@ class LumosYouTubeMonitor {
     });
     
     observer.observe(document, { childList: true, subtree: true });
-    
-    // Also listen to popstate (back/forward navigation)
     window.addEventListener('popstate', () => this.onVideoChange());
   }
 
   onVideoChange() {
     console.log('📺 Video changed:', location.href);
-    this.stopRecording();
-    // Stop previous polling
-    if (this.currentVideoId) {
-      chrome.runtime.sendMessage({ type: 'STOP_POLL', videoId: this.currentVideoId });
-    }
-    // Reset grouped state
-    this.groupedTopics = [];
-    this.firedTopicKeys.clear();
-    if (this.topicSchedulerId) { clearInterval(this.topicSchedulerId); this.topicSchedulerId = null; }
+    this.stopPolling();
+    this.shownClaimIds.clear();
+    this.allClaims = [];
+    this.lastCheckTime = -1;
+    this.isProcessing = false;
     
     setTimeout(() => {
       this.checkCurrentVideo();
-    }, 1000); // Wait for YouTube to load new video
+    }, 1000);
   }
 
-  checkCurrentVideo() {
+  async checkCurrentVideo() {
     const videoId = this.extractVideoId();
     if (videoId && videoId !== this.currentVideoId) {
       this.currentVideoId = videoId;
       console.log('🎬 New video detected:', videoId);
       
-      // Check user preferences and auto-start if enabled
-      chrome.storage.sync.get(['autoRecord'], (result) => {
-        if (result.autoRecord) {
-          this.startRecording();
+      // Always start polling immediately - in case video was already processed
+      console.log('🔄 Starting polling for existing claims...');
+      this.startPolling();
+      this.startTimeWatcher();
+      
+      // Also trigger analysis if auto-analyze is enabled
+      chrome.storage.sync.get(['autoAnalyze'], async (result) => {
+        if (result.autoAnalyze !== false) {
+          await this.startHybridProcessing();
         }
-        // Start grouped alerts polling regardless of recording
-        chrome.runtime.sendMessage({ type: 'START_POLL', videoId: this.currentVideoId });
-        // Initial fetch of grouped topics, then start scheduler
-        this.fetchGroupedTopics().then(() => this.startTopicScheduler());
       });
     }
   }
@@ -100,447 +114,441 @@ class LumosYouTubeMonitor {
     return urlParams.get('v');
   }
 
-  async startRecording() {
-    if (this.isRecording) {
-      console.log('⚠️ Already recording');
+  // ─────────────────────────────────────────────────────────────
+  // Hybrid Processing
+  // ─────────────────────────────────────────────────────────────
+
+  async startHybridProcessing() {
+    if (this.isProcessing) {
+      console.log('⏳ Already processing this video');
       return;
     }
 
+    const youtubeUrl = `https://www.youtube.com/watch?v=${this.currentVideoId}`;
+    console.log('🚀 Starting hybrid processing:', youtubeUrl);
+    
+    this.isProcessing = true;
+    this.updateBadge('...');
+
     try {
-      console.log('🎤 Starting audio recording...');
+      console.log('📡 Calling API: POST /api/video/start');
+      const response = await fetch(`${this.apiUrl}/api/video/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtube_url: youtubeUrl })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('✅ Processing started:', data);
+
+      // Start polling for claims AND watching video time
+      console.log('🔄 Starting polling and time watcher...');
+      this.startPolling();
+      this.startTimeWatcher();
+
+    } catch (error) {
+      console.error('❌ Failed to start processing:', error);
+      this.isProcessing = false;
+      this.updateBadge('!');
       
-      // Try to capture from YouTube video element directly first
-      const videoElement = document.querySelector('video');
-      if (videoElement && videoElement.captureStream) {
-        console.log('📺 Using video element captureStream...');
-        const videoStream = videoElement.captureStream();
-        const audioTrack = videoStream.getAudioTracks()[0];
-        if (audioTrack) {
-          const audioStream = new MediaStream([audioTrack]);
-          this.setupRecorder(audioStream);
+      // Check if it's a network error (API not running)
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        console.error('🔌 API server appears to be offline');
+      }
+      
+      this.showNotification('Lumos Error', 'Failed to analyze video. Is the API server running?');
+    }
+  }
+
+  startPolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+    }
+
+    console.log('🔄 Starting claim polling...');
+
+    // Poll every 3 seconds to get NEW claims from API
+    this.pollInterval = setInterval(() => {
+      this.fetchAllClaims();
+    }, 3000);
+
+    this.fetchAllClaims();
+  }
+
+  // Separate watcher for video time - checks every 500ms
+  startTimeWatcher() {
+    if (this.timeWatcher) {
+      clearInterval(this.timeWatcher);
+    }
+
+    this.timeWatcher = setInterval(() => {
+      this.checkClaimsForCurrentTime();
+    }, 500);
+  }
+
+  stopPolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+    if (this.timeWatcher) {
+      clearInterval(this.timeWatcher);
+      this.timeWatcher = null;
+    }
+    console.log('⏹️ Stopped polling');
+  }
+
+  async fetchAllClaims() {
+    if (!this.currentVideoId) return;
+
+    const url = `${this.apiUrl}/api/video/claims/yt-${this.currentVideoId}`;
+    
+    try {
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`📭 No claims yet for yt-${this.currentVideoId}`);
           return;
         }
+        throw new Error(`API error: ${response.status}`);
       }
 
-      // Fallback: request background tab audio capture (no mic prompt)
-      console.log('🔊 Requesting background tab audio capture…');
-      await chrome.runtime.sendMessage({ type: 'START_RECORDING_BG', videoId: this.currentVideoId });
-      this.isRecording = true;
-      this.updateBadge('REC');
-      return;
+      const data = await response.json();
       
-    } catch (error) {
-      console.error('❌ Failed to start recording:', error);
-      this.showNotification('Failed to start recording', 'Please grant microphone permission');
-    }
-  }
-
-  setupRecorder(stream) {
-    this.mediaRecorder = new MediaRecorder(stream, {
-      mimeType: 'audio/webm;codecs=opus'
-    });
-
-    this.audioChunks = [];
-
-    this.mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        this.audioChunks.push(event.data);
-      }
-    };
-
-    this.mediaRecorder.onstop = () => {
-      this.processAudioChunk();
-    };
-
-    // Start recording and set up chunking
-    this.mediaRecorder.start();
-    this.isRecording = true;
-    
-    // Process chunks every N seconds
-    this.recordingTimer = setInterval(() => {
-      if (this.isRecording && this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-        console.log('📦 Processing chunk...');
-        this.mediaRecorder.stop();
+      if (data.success) {
+        const prevCount = this.allClaims.length;
+        this.allClaims = data.data.claims || [];
         
-        // Restart recording for next chunk
-        setTimeout(() => {
-          if (this.isRecording && this.mediaRecorder) {
-            this.mediaRecorder.start();
-            this.audioChunks = [];
-          }
-        }, 100);
-      }
-    }, this.chunkDuration);
-
-    console.log('✅ Recording started');
-    this.updateBadge('REC');
-  }
-
-  async processAudioChunk() {
-    if (this.audioChunks.length === 0) return;
-    if (this.uploadInFlight) {
-      console.log('⏳ Upload in flight, skipping chunk');
-      return;
-    }
-
-    try {
-      // Convert chunks to blob
-      const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
-      
-      if (audioBlob.size < 1000) { // Skip very small chunks
-        return;
-      }
-
-      console.log(`📤 Sending audio chunk (${audioBlob.size} bytes) to API...`);
-
-      // Send to our API
-      const formData = new FormData();
-      formData.append('audio', audioBlob, 'chunk.webm');
-      formData.append('videoId', this.currentVideoId);
-      formData.append('timestamp', Date.now().toString());
-      const video = document.querySelector('video');
-      const curSec = video ? Math.floor(video.currentTime || 0) : 0;
-      formData.append('videoTimeSec', String(curSec));
-      formData.append('url', window.location.href);
-
-      this.uploadInFlight = true;
-      let response = null;
-      // Try live endpoint first
-      try {
-        response = await fetch(`${this.apiUrl}/api/live/chunk`, { method: 'POST', body: formData });
-      } catch {}
-      // If live failed or returned non-OK, try fallback transcription endpoint
-      if (!response || !response.ok) {
-        try {
-          response = await fetch(`${this.apiUrl}/api/transcribe/audio`, { method: 'POST', body: formData });
-        } catch {}
-      }
-
-      if (!response || !response.ok) {
-        const status = response ? response.status : 'fetch_failed';
-        throw new Error(`API error: ${status}`);
-      }
-
-      const result = await response.json();
-      
-      if (result.success && result.alerts && result.alerts.length > 0) {
-        console.log('🚨 Alerts detected:', result.alerts);
-        this.handleAlerts(result.alerts, result.transcript);
-      }
-
-    } catch (error) {
-      console.error('❌ Failed to process audio chunk:', error);
-      
-      // Check if it's ad blocker related
-      if (error.message.includes('ERR_BLOCKED_BY_CLIENT') || 
-          error.message.includes('NetworkError') ||
-          error.message.includes('Failed to fetch')) {
-        
-        this.handleAdBlockerDetection();
-      }
-    } finally { this.uploadInFlight = false; }
-  }
-
-  handleAdBlockerDetection() {
-    console.warn('🛡️ Ad blocker detected! Showing instructions...');
-    
-    // Stop recording to prevent spam
-    this.stopRecording();
-    
-    // Show notification with instructions
-    this.showNotification(
-      '🛡️ Ad Blocker Detected',
-      'Lumos is being blocked. Click for setup instructions.'
-    );
-    
-    // Send message to popup to show ad blocker instructions
-    chrome.runtime.sendMessage({
-      type: 'AD_BLOCKER_DETECTED',
-      userAgent: navigator.userAgent,
-      url: window.location.href
-    });
-  }
-
-  handleAlerts(alerts, transcript) {
-    // Show notifications for high-priority alerts
-    alerts.forEach(alert => {
-      this.showNotification(
-        `⚠️ Potential ${alert.verdict}: ${alert.claim}`,
-        alert.reasoning.substring(0, 100) + '...'
-      );
-    });
-
-    // Update badge with alert count
-    this.updateBadge(alerts.length.toString());
-
-    // Send to popup/background for storage
-    const video = document.querySelector('video');
-    chrome.runtime.sendMessage({
-      type: 'ALERTS_DETECTED',
-      alerts,
-      transcript,
-      videoId: this.currentVideoId,
-      timestamp: Date.now(),
-      video_time_sec: video ? Math.floor(video.currentTime || 0) : undefined
-    });
-  }
-
-  stopRecording() {
-    if (!this.isRecording) return;
-
-    console.log('⏹️ Stopping recording...');
-    
-    this.isRecording = false;
-    
-    // Clear timer first
-    if (this.recordingTimer) {
-      clearInterval(this.recordingTimer);
-      this.recordingTimer = null;
-    }
-
-    // Stop media recorder
-    if (this.mediaRecorder) {
-      if (this.mediaRecorder.state !== 'inactive') {
-        this.mediaRecorder.stop();
-      }
-      
-      // Stop all tracks
-      if (this.mediaRecorder.stream) {
-        this.mediaRecorder.stream.getTracks().forEach(track => {
-          track.stop();
-          console.log('🔇 Stopped track:', track.kind);
-        });
-      }
-      
-      this.mediaRecorder = null;
-    }
-
-    try { chrome.runtime.sendMessage({ type: 'STOP_RECORDING_BG', videoId: this.currentVideoId }); } catch {}
-    this.updateBadge('');
-    console.log('✅ Recording fully stopped');
-  }
-
-  handleMessage(message, sendResponse) {
-    console.log('📩 Received message:', message);
-    
-    switch (message.type) {
-      case 'START_RECORDING':
-        this.startRecording();
-        sendResponse({ success: true });
-        break;
-        
-      case 'STOP_RECORDING':
-        this.stopRecording();
-        sendResponse({ success: true });
-        break;
-        
-      case 'GET_STATUS':
-        sendResponse({
-          isRecording: this.isRecording,
-          videoId: this.currentVideoId,
-          url: location.href
-        });
-        break;
-      case 'GET_TIME':
-        try {
-          const v = document.querySelector('video');
-          sendResponse({ timeSec: Math.floor(v ? (v.currentTime || 0) : 0) });
-        } catch {
-          sendResponse({ timeSec: 0 });
+        if (this.allClaims.length !== prevCount) {
+          console.log(`📊 Claims updated: ${this.allClaims.length} total, status: ${data.data.status}`);
+          // Log each claim's timestamp for debugging
+          this.allClaims.forEach((c, i) => {
+            console.log(`   [${i}] @ ${c.timestamp} (${this.parseTimestamp(c.timestamp)}s)`);
+          });
         }
-        break;
         
-      default:
-        sendResponse({ error: 'Unknown message type' });
+        this.updateBadgeFromStatus(data.data.status, this.allClaims.length);
+        
+        // Immediately check if any claims should show now
+        this.checkClaimsForCurrentTime();
+      }
+
+    } catch (error) {
+      console.warn('❌ Fetch claims error:', error.message);
     }
+  }
+
+  // Check which claims should be shown based on current video time
+  checkClaimsForCurrentTime() {
+    const video = document.querySelector('video');
+    if (!video) return;
+    
+    const currentTimeSec = Math.floor(video.currentTime);
+    
+    // Don't re-check same second
+    if (currentTimeSec === this.lastCheckTime) return;
+    this.lastCheckTime = currentTimeSec;
+
+    // Log every 5 seconds for debugging (more frequent)
+    if (currentTimeSec % 5 === 0) {
+      const nextClaim = this.allClaims.find(c => {
+        const t = this.parseTimestamp(c.timestamp);
+        return !this.shownClaimIds.has(`${c.timestamp}_${c.finding?.slice(0, 30)}`) && t > currentTimeSec;
+      });
+      const nextTs = nextClaim ? nextClaim.timestamp : 'none';
+      console.log(`⏱️ ${this.formatTime(currentTimeSec)} | Claims: ${this.allClaims.length} | Shown: ${this.shownClaimIds.size} | Next: ${nextTs}`);
+    }
+
+    // Find claims that should trigger NOW
+    for (const claim of this.allClaims) {
+      const claimTimeSec = this.parseTimestamp(claim.timestamp);
+      const claimKey = `${claim.timestamp}_${claim.finding?.slice(0, 30)}`;
+      
+      // Show claim if:
+      // 1. We haven't shown it yet
+      // 2. Current video time has passed the claim's timestamp
+      if (!this.shownClaimIds.has(claimKey) && currentTimeSec >= claimTimeSec) {
+        this.shownClaimIds.add(claimKey);
+        
+        console.log(`🚨 ALERT! Time ${this.formatTime(currentTimeSec)} >= claim @ ${claim.timestamp}`);
+        console.log(`   📝 ${claim.finding?.slice(0, 60)}...`);
+        
+        // Show toast notification!
+        this.showClaimToast(claim);
+        
+        // Notify popup/background
+        chrome.runtime.sendMessage({
+          type: 'CLAIM_TRIGGERED',
+          claim,
+          videoId: this.currentVideoId,
+          triggeredAt: currentTimeSec
+        });
+      }
+    }
+  }
+
+  parseTimestamp(ts) {
+    if (!ts) return 0;
+    const parts = ts.split(':').map(Number);
+    if (parts.length === 2) {
+      return parts[0] * 60 + parts[1];
+    } else if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    return 0;
+  }
+
+  formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  updateBadgeFromStatus(status, totalClaims) {
+    const shownCount = this.shownClaimIds.size;
+    
+    if (status === 'complete') {
+      this.updateBadge(shownCount > 0 ? shownCount.toString() : '✓');
+    } else if (status === 'fast_track_complete' || status === 'processing') {
+      this.updateBadge('...');
+    }
+  }
+
+  // Get claims that have been revealed (for popup)
+  getRevealedClaims() {
+    const video = document.querySelector('video');
+    const currentTimeSec = video ? Math.floor(video.currentTime) : 0;
+    
+    return this.allClaims.filter(claim => {
+      const claimTimeSec = this.parseTimestamp(claim.timestamp);
+      return currentTimeSec >= claimTimeSec;
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // UI: Toast Notifications
+  // ─────────────────────────────────────────────────────────────
+
+  showClaimToast(claim) {
+    try {
+      const host = this.ensureToastHost();
+
+      const card = document.createElement('div');
+      card.className = 'lumos-toast-card';
+      card.style.cssText = `
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        box-shadow: 0 10px 40px rgba(0,0,0,0.5), 0 0 30px rgba(99, 102, 241, 0.3);
+        border-radius: 16px;
+        padding: 16px 18px;
+        margin-top: 12px;
+        color: #e5e7eb;
+        line-height: 1.4;
+        cursor: pointer;
+        pointer-events: auto;
+        max-width: 380px;
+        animation: lumos-slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        transform-origin: right center;
+      `;
+
+      // Header with icon and timestamp
+      const header = document.createElement('div');
+      header.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 10px;';
+      
+      const icon = document.createElement('span');
+      icon.textContent = '🔬';
+      icon.style.fontSize = '20px';
+      
+      const badge = document.createElement('span');
+      badge.style.cssText = `
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        color: white;
+        padding: 4px 10px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      `;
+      badge.textContent = `CLAIM @ ${claim.timestamp}`;
+      
+      const confidence = document.createElement('span');
+      confidence.style.cssText = `
+        font-size: 10px; 
+        padding: 3px 8px; 
+        border-radius: 6px; 
+        font-weight: 600;
+        margin-left: auto;
+        background: ${claim.confidence === 'high' ? '#10b981' : claim.confidence === 'medium' ? '#f59e0b' : '#6b7280'};
+        color: white;
+      `;
+      confidence.textContent = (claim.confidence || 'MEDIUM').toUpperCase();
+      
+      header.appendChild(icon);
+      header.appendChild(badge);
+      header.appendChild(confidence);
+      card.appendChild(header);
+
+      // Author (if present)
+      if (claim.author) {
+        const author = document.createElement('div');
+        author.style.cssText = 'font-size: 13px; color: #c4b5fd; margin-bottom: 8px; font-weight: 500;';
+        author.textContent = `👤 ${claim.author}`;
+        card.appendChild(author);
+      }
+
+      // Finding
+      const finding = document.createElement('div');
+      finding.style.cssText = 'font-size: 14px; color: #f3f4f6; margin-bottom: 12px; line-height: 1.5;';
+      const findingText = claim.finding || claim.segment || '';
+      finding.textContent = findingText.length > 160 ? findingText.slice(0, 160) + '...' : findingText;
+      card.appendChild(finding);
+
+      // Action button
+      const btn = document.createElement('div');
+      btn.style.cssText = `
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #818cf8;
+        padding: 6px 12px;
+        background: rgba(99, 102, 241, 0.1);
+        border-radius: 8px;
+        transition: background 0.2s;
+      `;
+      btn.innerHTML = '📚 Verify this claim →';
+      btn.onmouseover = () => btn.style.background = 'rgba(99, 102, 241, 0.2)';
+      btn.onmouseout = () => btn.style.background = 'rgba(99, 102, 241, 0.1)';
+      card.appendChild(btn);
+
+      // Click to open verification
+      card.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ 
+          type: 'OPEN_VERIFICATION', 
+          claim,
+          videoId: this.currentVideoId 
+        });
+        try { host.removeChild(card); } catch {}
+      });
+
+      host.appendChild(card);
+
+      // Play a subtle sound (if available)
+      try {
+        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2Onp2TgXVqan2Ok5yZjoF2b3N/ipKUko+HfXZzdH6Gi46OjIeCfHh4e4CGioyMioaDf3x6e36ChoqLiomGg4B9fH1/gYWIiomIhoSBf31+f4GEh4iIh4aEgn9+f4CChIaHh4aFg4F/fn5/gIKEhYaGhYSDgX9+fn+Ag4SFhYWEg4GAf35/gIGDhIWFhIOCgH9+fn+AgYOEhISEg4KAf35/f4CCg4SEhIOCgYB/fn9/gIGCg4SEg4OCgX9/f3+AgYKDg4OCgoGAf39/gIGCg4ODg4KBgH9/f4CAgYKDg4OCgoGAf39/gIGBgoODg4KCgYB/f3+AgIGCg4ODgoKBgH9/f4CAgYKCg4OCgoGAf39/gICBgoKDg4KCgYB/f3+AgIGCgoODgoKBgH9/f4CAgYKCgoKCgYGAf39/gICBgoKCgoKBgYB/f3+AgIGBgoKCgoGBgH9/f4CAgYGCgoKCgYGAf39/gICAgoKCgoKBgYB/f3+AgICBgoKCgoGBgH9/f4CAgIGCgoKCgYGAf39/gICAgYKCgoKBgYB/f3+AgICBgoKCgoGBgH9/f4CAgIGBgoKCgYGAf39/gICAgYGCgoKBgYB/f3+AgICBgYKCgoGBgH9/f4CAgIGBgoKBgYGAf39/gICAgYGCgoGBgYB/f3+AgICBgYKCgYGBgH9/f4CAgIGBgoKBgYGAf3+AgICAgYGBgoGBgYB/f4CAgICBgYGCgYGBgH9/gICAgIGBgYKBgYGAf3+AgICAgYGBgoGBgYB/f4CAgICBgYGBgYGBgH9/gICAgIGBgYGBgYGAf3+AgICAgYGBgYGBgYB/f4CAgICAgYGBgYGBgH9/gICAgIGBgYGBgYGAf3+AgICAgYGBgYGBgYB/f4CAgICBgYGBgYGBgH9/gICAgIGBgYGBgYGAf3+AgICAgYGBgYGBgICAf3+AgICAgYGBgYGBgICAf3+AgICAgYGBgYGBgICAf3+AgICAgYGBgYGAgICAf3+AgICAgYGBgYGAgICAf3+AgICAgIGBgYGAgICAf3+AgICAgIGBgYGAgICAf3+AgICAgIGBgYGAgICAf3+AgICAgIGBgYGAgICAf3+AgICAgIGBgYGAgICAf3+AgICAgIGBgYGAgICAf3+AgICAgIGBgYCAgICAf3+AgICAgIGBgYCAgICAf3+AgICAgIGBgYCAgICAf3+AgICAgIGBgYCAgICAf3+AgICAgIGBgYCAgICAf3+AgICAgIGBgICAgICAf3+AgICAgICBgICAgICAf3+AgICAgICBgICAgICAf3+AgICAgICBgICAgICAf3+AgICAgICBgICAgICAf3+AgICAgICAgICAgICAf3+AgICAgICAgICAgICAf3+AgICAgICAgICAgICAf3+AgICAgICAgICAgICAf3+AgICAgICAgICAgICAf3+AgICAgICAgICAgICAf3+AgICAgICAgICAgICAfw==');
+        audio.volume = 0.3;
+        audio.play().catch(() => {});
+      } catch {}
+
+      // Auto-remove after 10 seconds with fade out
+      setTimeout(() => {
+        try { 
+          card.style.animation = 'lumos-slide-out 0.4s ease-in forwards';
+          setTimeout(() => { try { host.removeChild(card); } catch {} }, 400);
+        } catch {}
+      }, 10000);
+
+    } catch (e) {
+      console.warn('Toast error:', e);
+    }
+  }
+
+  ensureToastHost() {
+    let host = document.getElementById('lumos-toast');
+    if (host) return host;
+
+    // Add animations
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes lumos-slide-in {
+        from { opacity: 0; transform: translateX(120px) scale(0.9); }
+        to { opacity: 1; transform: translateX(0) scale(1); }
+      }
+      @keyframes lumos-slide-out {
+        from { opacity: 1; transform: translateX(0) scale(1); }
+        to { opacity: 0; transform: translateX(120px) scale(0.9); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    host = document.createElement('div');
+    host.id = 'lumos-toast';
+    host.style.cssText = `
+      position: fixed;
+      right: 24px;
+      bottom: 100px;
+      z-index: 2147483647;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      pointer-events: none;
+    `;
+    
+    document.documentElement.appendChild(host);
+    console.log('🍞 Toast host created');
+    return host;
   }
 
   showNotification(title, message) {
-    // Request notification permission if needed
     if (Notification.permission === 'granted') {
       new Notification(title, {
         body: message,
         icon: chrome.runtime.getURL('icons/icon48.png')
       });
     } else if (Notification.permission !== 'denied') {
-      Notification.requestPermission().then(permission => {
-        if (permission === 'granted') {
-          new Notification(title, { body: message });
-        }
-      });
+      Notification.requestPermission();
     }
   }
 
   updateBadge(text) {
-    chrome.runtime.sendMessage({
-      type: 'UPDATE_BADGE',
-      text
-    });
+    chrome.runtime.sendMessage({ type: 'UPDATE_BADGE', text });
   }
 
-  async fetchGroupedTopics() {
-    if (!this.currentVideoId) return;
-    try {
-      const resp = await chrome.runtime.sendMessage({ type: 'GET_GROUPED_ALERTS', videoId: this.currentVideoId });
-      const topics = Array.isArray(resp?.topics) ? resp.topics : [];
-      this.groupedTopics = topics;
-      console.log('📚 Loaded grouped topics:', topics.length);
-    } catch (e) { console.warn('Failed to fetch grouped topics', e); }
-  }
-
-  startTopicScheduler() {
-    if (this.topicSchedulerId) clearInterval(this.topicSchedulerId);
-    const video = document.querySelector('video');
-    if (!video) return;
-    const toSeconds = (t) => {
-      if (typeof t === 'number') return t > 1e10 ? Math.floor(t / 1000) : Math.floor(t);
-      if (typeof t === 'string') { const n = Date.parse(t); if (!isNaN(n)) return Math.floor(n / 1000); }
-      return NaN;
-    };
-    // Build list of (key, timeSec)
-    const schedule = this.groupedTopics.map((t) => {
-      const d = t?.details || {};
-      const vt = Number(d.video_time_sec);
-      const ts = Number.isFinite(vt) && vt >= 0 ? Math.floor(vt) : toSeconds(d.timestamp);
-      return { key: String(t?.topic_id || t?.id || Math.random()), t, timeSec: ts };
-    }).filter(x => Number.isFinite(x.timeSec));
-    // If nothing to schedule, bail early
-    if (!schedule.length) return;
-    // Sort ascending by time
-    schedule.sort((a, b) => a.timeSec - b.timeSec);
-    this.topicSchedulerId = setInterval(() => {
-      const cur = Math.floor(video.currentTime || 0);
-      for (const item of schedule) {
-        if (this.firedTopicKeys.has(item.key)) continue;
-        if (cur >= item.timeSec) {
-          this.firedTopicKeys.add(item.key);
-          // Request auto-open popup first (guaranteed supported path)
-          try { chrome.runtime.sendMessage({ type: 'OPEN_POPUP', videoId: this.currentVideoId }); } catch {}
-          // Fire notification path as well
-          chrome.runtime.sendMessage({ type: 'SHOW_GROUPED_TOPIC', topic: item.t, videoId: this.currentVideoId });
-          this.showTopicToast(item.t);
-        }
-      }
-      // Refresh topics occasionally
-      if (Math.random() < 0.05) this.fetchGroupedTopics();
-    }, 1000);
-  }
-
-  showTopicToast(topic) {
-    try {
-      const claim = (topic?.details?.canonical_claim || topic?.details?.claim || 'Fact-check topic').toString();
-      const urls = (() => { try { return JSON.parse(topic?.urls || '[]'); } catch { return []; } })();
-      const primary = (Array.isArray(urls) && urls[0]) ? urls[0] : `http://localhost:4321/alerts?video_id=${encodeURIComponent(this.currentVideoId || '')}`;
-
-      const host = this.ensureToastHost();
-
-      const card = document.createElement('div');
-      card.style.background = '#ffffff';
-      card.style.border = '1px solid rgba(0,0,0,0.1)';
-      card.style.boxShadow = '0 10px 24px rgba(0,0,0,0.14)';
-      card.style.borderRadius = '12px';
-      card.style.padding = '12px 14px';
-      card.style.marginTop = '12px';
-      card.style.color = '#111827';
-      card.style.lineHeight = '1.35';
-      card.style.cursor = 'pointer';
-      card.style.pointerEvents = 'auto';
-
-      const header = document.createElement('div');
-      header.style.display = 'flex';
-      header.style.alignItems = 'center';
-      header.style.gap = '8px';
-      header.style.marginBottom = '6px';
-      const dot = document.createElement('span');
-      dot.style.display = 'inline-block';
-      dot.style.width = '8px';
-      dot.style.height = '8px';
-      dot.style.borderRadius = '999px';
-      dot.style.background = '#f59e0b';
-      const title = document.createElement('strong');
-      title.style.fontSize = '13px';
-      title.style.letterSpacing = '0.2px';
-      title.style.color = '#374151';
-      title.textContent = 'Lumos topic alert';
-      header.appendChild(dot);
-      header.appendChild(title);
-
-      const claimEl = document.createElement('div');
-      claimEl.style.fontSize = '14px';
-      claimEl.style.marginBottom = '8px';
-      claimEl.textContent = claim.length > 180 ? (claim.slice(0,180) + '…') : claim;
-
-      const linkEl = document.createElement('div');
-      linkEl.style.fontSize = '12px';
-      linkEl.style.color = '#2563eb';
-      linkEl.textContent = 'Open details ↗';
-
-      card.appendChild(header);
-      card.appendChild(claimEl);
-      card.appendChild(linkEl);
-
-      const open = () => {
-        try { window.open(primary, '_blank', 'noopener'); } catch {}
-        try { host.removeChild(card); } catch {}
-      };
-      card.addEventListener('click', open);
-      host.appendChild(card);
-
-      // If the card is not visible (e.g., hidden by stacking context), re-attach to body as fixed overlay
-      try {
-        const rect = card.getBoundingClientRect();
-        if ((rect.width === 0 && rect.height === 0) || !document.elementFromPoint(Math.max(0, rect.right-1), Math.max(0, rect.bottom-1))) {
-          const bodyHost = document.createElement('div');
-          bodyHost.style.position = 'fixed';
-          bodyHost.style.right = '16px';
-          bodyHost.style.bottom = '24px';
-          bodyHost.style.zIndex = '2147483647';
-          document.body.appendChild(bodyHost);
-          bodyHost.appendChild(card);
-          console.log('Lumos: toast fallback to body overlay');
-        }
-      } catch {}
-
-      setTimeout(() => { try { host.removeChild(card); } catch {} }, 9000);
-    } catch {}
-  }
-
-  ensureToastHost() {
-    let host = document.getElementById('lumos-toast');
-    if (host) return host;
-    host = document.createElement('div');
-    host.id = 'lumos-toast';
-    host.style.maxWidth = '380px';
-    host.style.fontFamily = 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-    host.style.pointerEvents = 'none';
-    // Always attach at top document element to bypass player/body restrictions
-    host.style.position = 'fixed';
-    host.style.right = '16px';
-    host.style.bottom = '24px';
-    host.style.zIndex = '2147483647';
-    try { document.documentElement.appendChild(host); console.log('Lumos: toast host attached to <html>'); } catch {}
-    // Re-attach if removed
-    try {
-      const obs = new MutationObserver(() => {
-        if (!document.getElementById('lumos-toast')) {
-          try { document.documentElement.appendChild(host); } catch {}
-        }
-      });
-      obs.observe(document.documentElement, { childList: true, subtree: true });
-    } catch {}
-    return host;
+  handleMessage(message, sendResponse) {
+    switch (message.type) {
+      case 'GET_STATUS':
+        sendResponse({
+          isProcessing: this.isProcessing,
+          videoId: this.currentVideoId,
+          claimsShown: this.shownClaimIds.size,
+          totalClaims: this.allClaims.length,
+          url: location.href
+        });
+        break;
+        
+      case 'GET_REVEALED_CLAIMS':
+        // Return only claims that have been revealed based on video time
+        sendResponse({
+          claims: this.getRevealedClaims()
+        });
+        break;
+        
+      case 'START_ANALYSIS':
+        this.startHybridProcessing();
+        sendResponse({ success: true });
+        break;
+        
+      case 'GET_TIME':
+        const v = document.querySelector('video');
+        sendResponse({ timeSec: Math.floor(v?.currentTime || 0) });
+        break;
+        
+      default:
+        sendResponse({ error: 'Unknown message type' });
+    }
   }
 }
 
-// Initialize when DOM is ready
-console.log('🔧 Lumos content script loaded!', window.location.href);
+// Initialize
+console.log('🔧 Lumos content script loaded (Hybrid Mode v2)');
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
-    console.log('🔧 DOM ready, initializing...');
-    window.LumosYouTubeMonitor = new LumosYouTubeMonitor();
+    window.LumosMonitor = new LumosYouTubeMonitor();
   });
 } else {
-  console.log('🔧 DOM already ready, initializing...');
-  window.LumosYouTubeMonitor = new LumosYouTubeMonitor();
+  window.LumosMonitor = new LumosYouTubeMonitor();
 }

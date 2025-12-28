@@ -1,25 +1,25 @@
-// Popup script
+// Popup script for Lumos (Hybrid Mode)
 class LumosPopup {
   constructor() {
     this.currentTab = null;
     this.currentStatus = null;
+    this.apiUrl = 'http://localhost:3001';
     this.astroUrl = 'http://localhost:4321';
-    // Promisified helpers for Chrome compatibility
-    this.sendMessage = (msg) => new Promise((resolve) => chrome.runtime.sendMessage(msg, resolve));
-    this.tabsQuery = (q) => new Promise((resolve) => chrome.tabs.query(q, resolve));
-    this.tabsSend = (tabId, msg) => new Promise((resolve) => chrome.tabs.sendMessage(tabId, msg, resolve));
-    this.storageGet = (keys) => new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
+    this.pollInterval = null;
+    
     this.init();
   }
 
   async init() {
-    console.log('🔧 Popup initialized');
+    console.log('🔧 Lumos popup initialized');
     
-    // Get current tab; if not YouTube, try to find a YouTube tab in the window
-    const tabs = await this.tabsQuery({ active: true, currentWindow: true });
+    // Get current tab
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     this.currentTab = tabs[0];
+    
+    // If not on YouTube, try to find a YouTube tab
     if (!this.isYouTubePage()) {
-      const ytTabs = await this.tabsQuery({ url: '*://*.youtube.com/watch*' });
+      const ytTabs = await chrome.tabs.query({ url: '*://*.youtube.com/watch*' });
       if (ytTabs?.length) this.currentTab = ytTabs[0];
     }
     
@@ -31,43 +31,23 @@ class LumosPopup {
     
     // Load settings
     await this.loadSettings();
-    const cfg = await this.storageGet(['astroUrl']);
-    if (cfg?.astroUrl) this.astroUrl = cfg.astroUrl;
     
-    // Load alerts
-    await this.loadAlerts();
-
-    // Listen for live updates from background
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message?.type === 'GROUPED_TOPICS_UPDATED') {
-        // Re-render when background storage changes
-        this.loadAlerts();
-      }
-    });
-
-    // Lightweight polling to catch missed events (every 5s)
-    this.pollId = setInterval(() => {
-      this.loadAlerts();
-    }, 5000);
+    // Start polling for claims if on YouTube
+    if (this.isYouTubePage()) {
+      this.startPolling();
+    }
   }
 
   setupEventListeners() {
-    // Control buttons
-    document.getElementById('start-btn').addEventListener('click', () => {
-      this.startMonitoring();
+    document.getElementById('analyze-btn').addEventListener('click', () => {
+      this.triggerAnalysis();
     });
     
-    document.getElementById('stop-btn').addEventListener('click', () => {
-      this.stopMonitoring();
+    document.getElementById('auto-analyze-toggle').addEventListener('click', (e) => {
+      this.toggleAutoAnalyze(e.currentTarget);
     });
     
-    // Settings toggle
-    document.getElementById('auto-record-toggle').addEventListener('click', (e) => {
-      this.toggleAutoRecord(e.target);
-    });
-    
-    // Footer links
-    document.getElementById('view-all-alerts').addEventListener('click', (e) => {
+    document.getElementById('view-all').addEventListener('click', (e) => {
       e.preventDefault();
       this.openAlertsPage();
     });
@@ -85,8 +65,7 @@ class LumosPopup {
     }
 
     try {
-      // Send message to content script
-      const response = await this.tabsSend(this.currentTab.id, {
+      const response = await chrome.tabs.sendMessage(this.currentTab.id, {
         type: 'GET_STATUS'
       });
       
@@ -99,57 +78,70 @@ class LumosPopup {
   }
 
   async loadSettings() {
-    const result = await chrome.storage.sync.get(['autoRecord', 'alertThreshold']);
+    const result = await chrome.storage.sync.get(['autoAnalyze']);
     
-    const autoRecordToggle = document.getElementById('auto-record-toggle');
-    if (result.autoRecord) {
-      autoRecordToggle.classList.add('active');
+    const toggle = document.getElementById('auto-analyze-toggle');
+    if (result.autoAnalyze !== false) { // Default to true
+      toggle.classList.add('active');
+    } else {
+      toggle.classList.remove('active');
     }
   }
 
-  async loadAlerts() {
+  startPolling() {
+    if (this.pollInterval) clearInterval(this.pollInterval);
+    
+    // Poll every 2 seconds
+    this.pollInterval = setInterval(() => {
+      this.loadClaims();
+    }, 2000);
+    
+    // Also load immediately
+    this.loadClaims();
+  }
+
+  async loadClaims() {
     if (!this.currentStatus?.videoId) return;
 
     try {
-      // Try quick local cache first for instant render
-      try {
-        const key = `grouped_${this.currentStatus.videoId}`;
-        const cachedLocal = await chrome.storage.local.get([key]);
-        const items = cachedLocal?.[key];
-        if (Array.isArray(items) && items.length) {
-          this.displayGrouped(items);
-        }
-      } catch {}
-
-      // Prefer grouped topics (force fetch first to avoid empty cache in some browsers)
-      const grouped = await this.sendMessage({
-        type: 'FETCH_GROUPED_ALERTS',
-        videoId: this.currentStatus.videoId
-      });
-      if (Array.isArray(grouped?.topics) && grouped.topics.length > 0) {
-        this.displayGrouped(grouped.topics);
-        return;
-      }
-
-      // Fallback to cached grouped
-      const cached = await this.sendMessage({
-        type: 'GET_GROUPED_ALERTS',
-        videoId: this.currentStatus.videoId
-      });
-      if (Array.isArray(cached?.topics) && cached.topics.length > 0) {
-        this.displayGrouped(cached.topics);
-        return;
-      }
-
-      // Fallback to alert chunks
-      const response = await this.sendMessage({
-        type: 'GET_ALERTS',
-        videoId: this.currentStatus.videoId
-      });
-      this.displayAlerts(response.alerts || []);
+      // Get REVEALED claims from content script (filtered by video time)
+      let revealedClaims = [];
+      let totalClaims = 0;
       
+      try {
+        const revealed = await chrome.tabs.sendMessage(this.currentTab.id, {
+          type: 'GET_REVEALED_CLAIMS'
+        });
+        
+        if (revealed?.claims) {
+          revealedClaims = revealed.claims;
+        }
+      } catch (e) {
+        console.log('Could not get revealed claims from content script');
+      }
+
+      // Also get total claims from API to know progress
+      try {
+        const response = await fetch(
+          `${this.apiUrl}/api/video/claims/yt-${this.currentStatus.videoId}`
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            totalClaims = data.data.claims?.length || 0;
+            this.updateProcessingStatus(data.data.status, revealedClaims.length, totalClaims);
+          }
+        }
+      } catch (e) {
+        console.log('Could not fetch claims from API');
+      }
+
+      // Display the revealed claims
+      this.displayClaims({ claims: revealedClaims });
+
     } catch (error) {
-      console.error('Failed to load alerts:', error);
+      console.error('loadClaims error:', error);
     }
   }
 
@@ -158,15 +150,23 @@ class LumosPopup {
   }
 
   showNotYouTube() {
-    document.getElementById('status-text').textContent = 'Not on YouTube';
-    document.getElementById('start-btn').disabled = true;
-    document.getElementById('stop-btn').disabled = true;
+    const statusCard = document.getElementById('status');
+    const statusLabel = document.getElementById('status-label');
+    const statusDetail = document.getElementById('status-detail');
+    const analyzeBtn = document.getElementById('analyze-btn');
+    
+    statusCard.className = 'status-card idle';
+    statusLabel.textContent = 'Not on YouTube';
+    statusDetail.textContent = 'Open a YouTube video to start';
+    analyzeBtn.disabled = true;
   }
 
   showNotReady() {
-    document.getElementById('status-text').textContent = 'Loading...';
-    document.getElementById('start-btn').disabled = true;
-    document.getElementById('stop-btn').disabled = true;
+    const statusLabel = document.getElementById('status-label');
+    const statusDetail = document.getElementById('status-detail');
+    
+    statusLabel.textContent = 'Loading...';
+    statusDetail.textContent = 'Waiting for content script';
     
     // Retry after a moment
     setTimeout(() => this.loadStatus(), 1000);
@@ -175,139 +175,174 @@ class LumosPopup {
   updateStatusDisplay(status) {
     this.currentStatus = status;
     
-    const statusEl = document.getElementById('status');
-    const statusText = document.getElementById('status-text');
-    const startBtn = document.getElementById('start-btn');
-    const stopBtn = document.getElementById('stop-btn');
+    const statusCard = document.getElementById('status');
+    const statusLabel = document.getElementById('status-label');
+    const statusDetail = document.getElementById('status-detail');
     const videoInfo = document.getElementById('video-info');
+    const analyzeBtn = document.getElementById('analyze-btn');
     
-    if (status?.isRecording) {
-      statusEl.className = 'status active';
-      statusText.textContent = 'Monitoring active';
-      startBtn.disabled = true;
-      stopBtn.disabled = false;
+    if (status?.isProcessing) {
+      statusCard.className = 'status-card processing';
+      statusLabel.textContent = 'Analyzing video...';
+      const shown = status.claimsShown || 0;
+      const total = status.totalClaims || 0;
+      statusDetail.textContent = total > 0 
+        ? `${shown} shown / ${total} found (alerts appear as you watch)`
+        : 'Processing...';
+      analyzeBtn.disabled = true;
+    } else if (status?.videoId) {
+      statusCard.className = 'status-card idle';
+      statusLabel.textContent = 'Ready to analyze';
+      statusDetail.textContent = 'Click button or wait for auto-analyze';
+      analyzeBtn.disabled = false;
     } else {
-      statusEl.className = 'status inactive';
-      statusText.textContent = 'Monitoring inactive';
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
+      statusCard.className = 'status-card idle';
+      statusLabel.textContent = 'Not on YouTube';
+      statusDetail.textContent = 'Navigate to a YouTube video';
+      analyzeBtn.disabled = true;
     }
     
     if (status?.videoId) {
       videoInfo.style.display = 'block';
       document.getElementById('video-id').textContent = `Video ID: ${status.videoId}`;
-      document.getElementById('video-url').textContent = status.url;
     } else {
       videoInfo.style.display = 'none';
     }
   }
 
-  async startMonitoring() {
+  updateProcessingStatus(status, revealedCount = 0, totalCount = 0) {
+    const statusCard = document.getElementById('status');
+    const statusLabel = document.getElementById('status-label');
+    const statusDetail = document.getElementById('status-detail');
+    
+    const claimsInfo = totalCount > 0 
+      ? `${revealedCount} shown / ${totalCount} total`
+      : 'No claims yet';
+    
+    if (status === 'complete') {
+      statusCard.className = 'status-card idle';
+      statusLabel.textContent = '✓ Analysis complete';
+      statusDetail.textContent = totalCount > 0 
+        ? `${claimsInfo} • Alerts appear as you watch`
+        : 'No scientific claims found in this video';
+    } else if (status === 'fast_track_complete') {
+      statusCard.className = 'status-card processing';
+      statusLabel.textContent = 'Still analyzing...';
+      statusDetail.textContent = `${claimsInfo} • More coming`;
+    } else if (status === 'processing') {
+      statusCard.className = 'status-card processing';
+      statusLabel.textContent = 'Analyzing video...';
+      statusDetail.textContent = claimsInfo;
+    } else {
+      // Not started or unknown
+      statusCard.className = 'status-card idle';
+      statusLabel.textContent = 'Ready';
+      statusDetail.textContent = 'Will analyze when video plays';
+    }
+  }
+
+  async triggerAnalysis() {
+    if (!this.currentStatus?.videoId) return;
+
     try {
       await chrome.tabs.sendMessage(this.currentTab.id, {
-        type: 'START_RECORDING'
+        type: 'START_ANALYSIS'
       });
       
-      // Refresh status
-      setTimeout(() => this.loadStatus(), 500);
+      // Update UI immediately
+      const statusCard = document.getElementById('status');
+      const statusLabel = document.getElementById('status-label');
+      
+      statusCard.className = 'status-card processing';
+      statusLabel.textContent = 'Starting analysis...';
       
     } catch (error) {
-      console.error('Failed to start monitoring:', error);
-      alert('Failed to start monitoring. Please refresh the page and try again.');
+      console.error('Failed to start analysis:', error);
     }
   }
 
-  async stopMonitoring() {
-    try {
-      await chrome.tabs.sendMessage(this.currentTab.id, {
-        type: 'STOP_RECORDING'
-      });
-      
-      // Refresh status
-      setTimeout(() => this.loadStatus(), 500);
-      
-    } catch (error) {
-      console.error('Failed to stop monitoring:', error);
-    }
-  }
-
-  async toggleAutoRecord(toggleEl) {
-    const isActive = toggleEl.classList.toggle('active');
+  displayClaims(data) {
+    const claimsList = document.getElementById('claims-list');
+    const claimsCount = document.getElementById('claims-count');
+    const claims = data.claims || [];
     
-    await chrome.storage.sync.set({ autoRecord: isActive });
+    claimsCount.textContent = claims.length;
     
-    console.log('Auto-record setting:', isActive);
-  }
-
-  displayAlerts(alertChunks) {
-    const alertsList = document.getElementById('alerts-list');
-    const alertCount = document.getElementById('alert-count');
-    
-    // Flatten all alerts from all chunks
-    const allAlerts = alertChunks.flatMap(chunk => 
-      chunk.alerts.map(alert => ({
-        ...alert,
-        timestamp: chunk.timestamp
-      }))
-    );
-    
-    alertCount.textContent = allAlerts.length;
-    
-    if (allAlerts.length === 0) {
-      alertsList.innerHTML = '<div class="no-alerts">No alerts detected</div>';
-      return;
-    }
-    
-    // Sort by timestamp (newest first)
-    allAlerts.sort((a, b) => b.timestamp - a.timestamp);
-    
-    // Display recent alerts (max 5)
-    const recentAlerts = allAlerts.slice(0, 5);
-    
-    alertsList.innerHTML = recentAlerts.map(alert => `
-      <div class="alert-item">
-        <div class="alert-verdict ${alert.verdict}">${alert.verdict}</div>
-        <div class="alert-claim">${this.truncateText(alert.claim, 80)}</div>
-        <div class="alert-confidence">Confidence: ${Math.round(alert.confidence * 100)}%</div>
-      </div>
-    `).join('');
-  }
-
-  displayGrouped(topics) {
-    const alertsList = document.getElementById('alerts-list');
-    const alertCount = document.getElementById('alert-count');
-    alertCount.textContent = topics.length;
-    if (!topics.length) {
-      alertsList.innerHTML = '<div class="no-alerts">No alerts detected</div>';
-      return;
-    }
-    const items = topics.slice(0, 5).map(t => {
-      const claim = t.details?.canonical_claim || t.details?.claim || 'Grouped topic';
-      const urls = (() => { try { return JSON.parse(t.urls || '[]'); } catch { return []; } })();
-      const link = urls[0] ? urls[0].replace(/^https?:\/\//, '') : 'no link';
-      return `
-        <div class="alert-item">
-          <div class="alert-verdict">topic</div>
-          <div class="alert-claim">${this.truncateText(claim, 120)}</div>
-          <div class="alert-confidence">${link}</div>
+    if (claims.length === 0) {
+      claimsList.innerHTML = `
+        <div class="no-claims">
+          <div class="no-claims-icon">🔍</div>
+          No claims detected yet
         </div>
       `;
-    }).join('');
-    alertsList.innerHTML = items;
+      return;
+    }
+    
+    // Sort by timestamp
+    claims.sort((a, b) => {
+      const timeA = this.parseTimestamp(a.timestamp);
+      const timeB = this.parseTimestamp(b.timestamp);
+      return timeA - timeB;
+    });
+    
+    // Display claims (max 6)
+    const recentClaims = claims.slice(0, 6);
+    
+    claimsList.innerHTML = recentClaims.map(claim => `
+      <div class="claim-item" data-claim='${JSON.stringify(claim).replace(/'/g, "\\'")}'>
+        <div class="claim-header">
+          <span class="claim-timestamp">@ ${claim.timestamp}</span>
+          <span class="claim-confidence ${claim.confidence || 'medium'}">${(claim.confidence || 'MEDIUM').toUpperCase()}</span>
+        </div>
+        ${claim.author ? `<div class="claim-author">👤 ${claim.author}</div>` : ''}
+        <div class="claim-text">${this.truncate(claim.finding || claim.segment || '', 100)}</div>
+      </div>
+    `).join('');
+    
+    // Add click handlers
+    claimsList.querySelectorAll('.claim-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const claim = JSON.parse(item.dataset.claim);
+        this.openClaimDetails(claim);
+      });
+    });
   }
 
-  truncateText(text, maxLength) {
+  parseTimestamp(ts) {
+    if (!ts) return 0;
+    const parts = ts.split(':').map(Number);
+    if (parts.length === 2) {
+      return parts[0] * 60 + parts[1];
+    } else if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    return 0;
+  }
+
+  truncate(text, maxLength) {
+    if (!text) return '';
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength) + '...';
   }
 
+  async toggleAutoAnalyze(toggleEl) {
+    const isActive = toggleEl.classList.toggle('active');
+    await chrome.storage.sync.set({ autoAnalyze: isActive });
+    console.log('Auto-analyze setting:', isActive);
+  }
+
+  async openClaimDetails(claim) {
+    // Open verification page for this claim
+    const url = `${this.astroUrl}/alerts?claim=${encodeURIComponent(JSON.stringify(claim))}`;
+    await chrome.tabs.create({ url });
+    window.close();
+  }
+
   async openAlertsPage() {
-    if (this.currentStatus?.videoId) {
-      const url = `${this.astroUrl}/alerts?video_id=${this.currentStatus.videoId}`;
-      await chrome.tabs.create({ url });
-    } else {
-      await chrome.tabs.create({ url: `${this.astroUrl}/alerts` });
-    }
+    const url = this.currentStatus?.videoId 
+      ? `${this.astroUrl}/alerts?video_id=${this.currentStatus.videoId}`
+      : `${this.astroUrl}/alerts`;
+    await chrome.tabs.create({ url });
     window.close();
   }
 
@@ -321,5 +356,3 @@ class LumosPopup {
 document.addEventListener('DOMContentLoaded', () => {
   new LumosPopup();
 });
-
-

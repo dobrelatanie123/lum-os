@@ -3,229 +3,318 @@
 <head>
   <meta charset="utf-8">
   <style>
+    :root {
+      --bg-primary: #0f0f1a;
+      --bg-secondary: #1a1a2e;
+      --bg-card: #16213e;
+      --text-primary: #f3f4f6;
+      --text-secondary: #9ca3af;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.3);
+      --success: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+    }
+    
     body {
-      width: 320px;
-      padding: 16px;
+      width: 360px;
+      padding: 0;
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
       font-size: 14px;
-      background: #f8f9fa;
+      background: var(--bg-primary);
+      color: var(--text-primary);
     }
     
     .header {
       display: flex;
       align-items: center;
-      margin-bottom: 16px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid #e9ecef;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
+      border-bottom: 1px solid rgba(99, 102, 241, 0.2);
     }
     
     .logo {
-      width: 24px;
-      height: 24px;
-      background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
-      border-radius: 6px;
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      border-radius: 10px;
       margin-right: 12px;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
-      font-weight: bold;
-      font-size: 12px;
+      font-weight: 700;
+      font-size: 16px;
+      box-shadow: 0 4px 12px var(--accent-glow);
     }
     
     .title {
       font-weight: 600;
-      color: #212529;
+      font-size: 16px;
+      letter-spacing: -0.3px;
     }
     
-    .status {
+    .subtitle {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+    
+    .content {
+      padding: 16px 20px;
+    }
+    
+    .status-card {
       display: flex;
       align-items: center;
-      padding: 12px;
+      padding: 14px 16px;
+      border-radius: 12px;
       margin-bottom: 16px;
-      border-radius: 8px;
-      font-size: 13px;
+      border: 1px solid;
     }
     
-    .status.active {
-      background: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
+    .status-card.processing {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
+      border-color: rgba(99, 102, 241, 0.3);
     }
     
-    .status.inactive {
-      background: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
+    .status-card.idle {
+      background: rgba(75, 85, 99, 0.2);
+      border-color: rgba(75, 85, 99, 0.3);
+    }
+    
+    .status-card.error {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.3);
     }
     
     .status-indicator {
-      width: 8px;
-      height: 8px;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
-      margin-right: 8px;
+      margin-right: 12px;
+      flex-shrink: 0;
     }
     
-    .status.active .status-indicator {
-      background: #28a745;
+    .status-card.processing .status-indicator {
+      background: var(--accent);
+      animation: pulse 1.5s infinite;
     }
     
-    .status.inactive .status-indicator {
-      background: #dc3545;
+    .status-card.idle .status-indicator {
+      background: #6b7280;
+    }
+    
+    .status-card.error .status-indicator {
+      background: var(--error);
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    
+    .status-text {
+      flex: 1;
+    }
+    
+    .status-label {
+      font-weight: 500;
+      font-size: 13px;
+    }
+    
+    .status-detail {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 2px;
     }
     
     .video-info {
-      background: white;
-      padding: 12px;
-      border-radius: 8px;
+      background: var(--bg-card);
+      padding: 12px 14px;
+      border-radius: 10px;
       margin-bottom: 16px;
-      border: 1px solid #e9ecef;
+      border: 1px solid rgba(255,255,255,0.05);
     }
     
     .video-id {
-      font-family: monospace;
-      font-size: 12px;
-      color: #6c757d;
-      margin-bottom: 4px;
-    }
-    
-    .video-url {
-      font-size: 12px;
-      color: #6c757d;
-      word-break: break-all;
-    }
-    
-    .controls {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      letter-spacing: 0.5px;
     }
     
     .btn {
-      flex: 1;
-      padding: 10px 16px;
+      width: 100%;
+      padding: 12px 20px;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 500;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
+      margin-bottom: 16px;
     }
     
     .btn-primary {
-      background: #007bff;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
       color: white;
+      box-shadow: 0 4px 16px var(--accent-glow);
     }
     
     .btn-primary:hover {
-      background: #0056b3;
-    }
-    
-    .btn-danger {
-      background: #dc3545;
-      color: white;
-    }
-    
-    .btn-danger:hover {
-      background: #c82333;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px var(--accent-glow);
     }
     
     .btn:disabled {
-      opacity: 0.6;
+      opacity: 0.5;
       cursor: not-allowed;
+      transform: none;
     }
     
-    .alerts-section {
-      background: white;
-      border-radius: 8px;
-      border: 1px solid #e9ecef;
+    .claims-section {
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.05);
       overflow: hidden;
     }
     
-    .alerts-header {
-      padding: 12px;
-      background: #f8f9fa;
-      border-bottom: 1px solid #e9ecef;
-      font-weight: 600;
-      font-size: 13px;
-      color: #495057;
+    .claims-header {
+      padding: 14px 16px;
+      background: var(--bg-card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
     
-    .alerts-list {
-      max-height: 200px;
+    .claims-title {
+      font-weight: 600;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .claims-count {
+      background: var(--accent);
+      color: white;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    
+    .claims-list {
+      max-height: 240px;
       overflow-y: auto;
     }
     
-    .alert-item {
-      padding: 12px;
-      border-bottom: 1px solid #f1f3f4;
+    .claim-item {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      transition: background 0.2s;
+      cursor: pointer;
     }
     
-    .alert-item:last-child {
+    .claim-item:hover {
+      background: rgba(99, 102, 241, 0.05);
+    }
+    
+    .claim-item:last-child {
       border-bottom: none;
     }
     
-    .alert-verdict {
+    .claim-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    
+    .claim-timestamp {
+      font-size: 11px;
+      color: var(--accent);
       font-weight: 600;
+    }
+    
+    .claim-confidence {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    
+    .claim-confidence.high {
+      background: var(--success);
+      color: white;
+    }
+    
+    .claim-confidence.medium {
+      background: var(--warning);
+      color: white;
+    }
+    
+    .claim-confidence.low {
+      background: #6b7280;
+      color: white;
+    }
+    
+    .claim-author {
       font-size: 12px;
-      text-transform: uppercase;
+      color: #c4b5fd;
       margin-bottom: 4px;
     }
     
-    .alert-verdict.false { color: #dc3545; }
-    .alert-verdict.misleading { color: #fd7e14; }
-    .alert-verdict.unverified { color: #6f42c1; }
-    
-    .alert-claim {
-      font-size: 12px;
-      color: #212529;
-      margin-bottom: 6px;
+    .claim-text {
+      font-size: 13px;
+      color: var(--text-primary);
       line-height: 1.4;
     }
     
-    .alert-confidence {
-      font-size: 11px;
-      color: #6c757d;
+    .no-claims {
+      padding: 32px 24px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 13px;
     }
     
-    .no-alerts {
-      padding: 24px;
-      text-align: center;
-      color: #6c757d;
-      font-size: 13px;
+    .no-claims-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
     }
     
     .settings {
       margin-top: 16px;
-      padding-top: 16px;
-      border-top: 1px solid #e9ecef;
+      padding: 14px 16px;
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.05);
     }
     
     .setting-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
     }
     
     .setting-label {
       font-size: 13px;
-      color: #495057;
+      color: var(--text-secondary);
     }
     
     .toggle {
       position: relative;
       width: 44px;
       height: 24px;
-      background: #ccc;
+      background: #374151;
       border-radius: 12px;
       cursor: pointer;
       transition: background 0.2s;
     }
     
     .toggle.active {
-      background: #007bff;
+      background: var(--accent);
     }
     
     .toggle-handle {
@@ -244,16 +333,16 @@
     }
     
     .footer {
-      margin-top: 16px;
-      padding-top: 12px;
-      border-top: 1px solid #e9ecef;
+      padding: 12px 20px;
       text-align: center;
+      border-top: 1px solid rgba(255,255,255,0.05);
     }
     
     .footer-link {
-      color: #007bff;
+      color: var(--accent);
       text-decoration: none;
       font-size: 12px;
+      margin: 0 8px;
     }
     
     .footer-link:hover {
@@ -264,50 +353,59 @@
 <body>
   <div class="header">
     <div class="logo">L</div>
-    <div class="title">Lumos Fact Checker</div>
-  </div>
-
-  <div id="status" class="status inactive">
-    <div class="status-indicator"></div>
-    <span id="status-text">Not monitoring</span>
-  </div>
-
-  <div id="video-info" class="video-info" style="display: none;">
-    <div id="video-id" class="video-id"></div>
-    <div id="video-url" class="video-url"></div>
-  </div>
-
-  <div class="controls">
-    <button id="start-btn" class="btn btn-primary">Start Monitoring</button>
-    <button id="stop-btn" class="btn btn-danger" disabled>Stop</button>
-  </div>
-
-  <div class="alerts-section">
-    <div class="alerts-header">
-      Recent Alerts (<span id="alert-count">0</span>)
-    </div>
-    <div id="alerts-list" class="alerts-list">
-      <div class="no-alerts">No alerts detected</div>
+    <div>
+      <div class="title">Lumos</div>
+      <div class="subtitle">AI Fact Checker • Gemini 3 Flash</div>
     </div>
   </div>
 
-  <div class="settings">
-    <div class="setting-item">
-      <div class="setting-label">Auto-start monitoring</div>
-      <div id="auto-record-toggle" class="toggle">
-        <div class="toggle-handle"></div>
+  <div class="content">
+    <div id="status" class="status-card idle">
+      <div class="status-indicator"></div>
+      <div class="status-text">
+        <div id="status-label" class="status-label">Not analyzing</div>
+        <div id="status-detail" class="status-detail">Navigate to a YouTube video</div>
+      </div>
+    </div>
+
+    <div id="video-info" class="video-info" style="display: none;">
+      <div id="video-id" class="video-id"></div>
+    </div>
+
+    <button id="analyze-btn" class="btn btn-primary" disabled>
+      🔬 Analyze Now
+    </button>
+
+    <div class="claims-section">
+      <div class="claims-header">
+        <div class="claims-title">
+          🧪 Scientific Claims
+          <span id="claims-count" class="claims-count">0</span>
+        </div>
+      </div>
+      <div id="claims-list" class="claims-list">
+        <div class="no-claims">
+          <div class="no-claims-icon">🔍</div>
+          No claims detected yet
+        </div>
+      </div>
+    </div>
+
+    <div class="settings">
+      <div class="setting-item">
+        <div class="setting-label">Always analyze on play</div>
+        <div id="auto-analyze-toggle" class="toggle active">
+          <div class="toggle-handle"></div>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="footer">
-    <a href="#" id="view-all-alerts" class="footer-link">View All Alerts</a>
-    •
+    <a href="#" id="view-all" class="footer-link">View All</a>
     <a href="#" id="settings-link" class="footer-link">Settings</a>
   </div>
 
   <script src="popup.js"></script>
 </body>
 </html>
-
-
