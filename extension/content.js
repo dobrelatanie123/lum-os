@@ -114,6 +114,20 @@ class LumosYouTubeMonitor {
     return urlParams.get('v');
   }
 
+  getVideoTitle() {
+    // Try multiple selectors for YouTube video title
+    const titleEl = document.querySelector('h1.ytd-video-primary-info-renderer yt-formatted-string') ||
+                    document.querySelector('h1.ytd-watch-metadata yt-formatted-string') ||
+                    document.querySelector('h1 yt-formatted-string');
+    
+    if (titleEl?.textContent) {
+      return titleEl.textContent.trim();
+    }
+    
+    // Fallback to document title (minus " - YouTube" suffix)
+    return document.title.replace(/ - YouTube$/, '').trim();
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Hybrid Processing
   // ─────────────────────────────────────────────────────────────
@@ -513,6 +527,7 @@ class LumosYouTubeMonitor {
         sendResponse({
           isProcessing: this.isProcessing,
           videoId: this.currentVideoId,
+          videoTitle: this.getVideoTitle(),
           claimsShown: this.shownClaimIds.size,
           totalClaims: this.allClaims.length,
           url: location.href

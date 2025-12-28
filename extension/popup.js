@@ -204,7 +204,7 @@ class LumosPopup {
     
     if (status?.videoId) {
       videoInfo.style.display = 'block';
-      document.getElementById('video-id').textContent = `Video ID: ${status.videoId}`;
+      document.getElementById('video-title').textContent = status.videoTitle || 'Loading...';
     } else {
       videoInfo.style.display = 'none';
     }

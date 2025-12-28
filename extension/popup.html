@@ -137,11 +137,15 @@
       border: 1px solid rgba(255,255,255,0.05);
     }
     
-    .video-id {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: var(--accent);
-      letter-spacing: 0.5px;
+    .video-title {
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 500;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
     
     .btn {
@@ -355,7 +359,7 @@
     <div class="logo">L</div>
     <div>
       <div class="title">Lumos</div>
-      <div class="subtitle">AI Fact Checker • Gemini 3 Flash</div>
+      <div class="subtitle">AI Fact Checker</div>
     </div>
   </div>
 
@@ -369,7 +373,7 @@
     </div>
 
     <div id="video-info" class="video-info" style="display: none;">
-      <div id="video-id" class="video-id"></div>
+      <div id="video-title" class="video-title"></div>
     </div>
 
     <button id="analyze-btn" class="btn btn-primary" disabled>
