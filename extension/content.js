@@ -63,21 +63,30 @@ class LumosYouTubeMonitor {
   }
 
   observeVideoChanges() {
-    let currentUrl = location.href;
+    let lastVideoId = this.extractVideoId();
     
     const observer = new MutationObserver(() => {
-      if (location.href !== currentUrl) {
-        currentUrl = location.href;
+      const currentVideoId = this.extractVideoId();
+      // Only trigger change if the actual VIDEO ID changed, not playlist index
+      if (currentVideoId && currentVideoId !== lastVideoId) {
+        console.log(`📺 Video ID changed: ${lastVideoId} → ${currentVideoId}`);
+        lastVideoId = currentVideoId;
         this.onVideoChange();
       }
     });
     
     observer.observe(document, { childList: true, subtree: true });
-    window.addEventListener('popstate', () => this.onVideoChange());
+    window.addEventListener('popstate', () => {
+      const currentVideoId = this.extractVideoId();
+      if (currentVideoId !== lastVideoId) {
+        lastVideoId = currentVideoId;
+        this.onVideoChange();
+      }
+    });
   }
 
   onVideoChange() {
-    console.log('📺 Video changed:', location.href);
+    console.log('📺 Video changed, resetting state...');
     this.stopPolling();
     this.shownClaimIds.clear();
     this.allClaims = [];
@@ -199,6 +208,8 @@ class LumosYouTubeMonitor {
       clearInterval(this.timeWatcher);
     }
 
+    console.log('⏰ Time watcher started');
+    
     this.timeWatcher = setInterval(() => {
       this.checkClaimsForCurrentTime();
     }, 500);
@@ -260,7 +271,14 @@ class LumosYouTubeMonitor {
   // Check which claims should be shown based on current video time
   checkClaimsForCurrentTime() {
     const video = document.querySelector('video');
-    if (!video) return;
+    if (!video) {
+      // Log once per minute if no video
+      if (!this._noVideoLoggedAt || Date.now() - this._noVideoLoggedAt > 60000) {
+        console.log('⚠️ No video element found');
+        this._noVideoLoggedAt = Date.now();
+      }
+      return;
+    }
     
     const currentTimeSec = Math.floor(video.currentTime);
     
@@ -268,8 +286,8 @@ class LumosYouTubeMonitor {
     if (currentTimeSec === this.lastCheckTime) return;
     this.lastCheckTime = currentTimeSec;
 
-    // Log every 5 seconds for debugging (more frequent)
-    if (currentTimeSec % 5 === 0) {
+    // Log every 10 seconds for debugging
+    if (currentTimeSec % 10 === 0 && currentTimeSec > 0) {
       const nextClaim = this.allClaims.find(c => {
         const t = this.parseTimestamp(c.timestamp);
         return !this.shownClaimIds.has(`${c.timestamp}_${c.finding?.slice(0, 30)}`) && t > currentTimeSec;

@@ -660,7 +660,7 @@ async function getGeminiExtractor() {
 async function getHybridProcessor() {
   if (!hybridProcessor) {
     const { HybridProcessor } = await import('./services/claim-extraction/hybrid-processor.js');
-    hybridProcessor = new HybridProcessor();
+    hybridProcessor = new HybridProcessor({ supabase });
   }
   return hybridProcessor;
 }
@@ -696,15 +696,16 @@ app.post('/api/analyze', async (req, res) => {
     
     console.log(`✅ Extracted ${claims.length} claims in ${(processingTime / 1000).toFixed(1)}s`);
     
-    // Optionally save to database
-    if (supabase && claims.length > 0) {
+    // Save to database
+    if (supabase) {
       try {
-        // Save podcast entry
-        await supabase.from('podcasts').upsert({
+        // Save video entry first
+        await supabase.from('videos').upsert({
           id: videoId,
           title: videoTitle,
-          source_url: youtube_url,
-          status: 'analyzed'
+          url: youtube_url,
+          claims_count: claims.length,
+          first_analyzed_at: new Date().toISOString()
         }, { onConflict: 'id' });
         
         // Save claims
@@ -712,20 +713,18 @@ app.post('/api/analyze', async (req, res) => {
           await supabase.from('claims').upsert({
             claim_id: claim.claim_id,
             video_id: claim.video_id,
-            segment_text: claim.segment.full_text,
-            segment_word_count: claim.segment.word_count,
-            author_mentioned: claim.extraction.author_mentioned,
-            author_normalized: claim.extraction.author_normalized,
-            author_variants: claim.extraction.author_variants,
-            institution_mentioned: claim.extraction.institution_mentioned,
-            finding_summary: claim.extraction.finding_summary,
-            confidence: claim.extraction.confidence,
-            primary_query: claim.search.primary_query,
-            fallback_queries: claim.search.fallback_queries
+            timestamp: claim.timestamp,
+            segment_text: claim.segment?.full_text || '',
+            author_mentioned: claim.extraction?.author_mentioned,
+            author_normalized: claim.extraction?.author_normalized,
+            institution_mentioned: claim.extraction?.institution_mentioned,
+            finding_summary: claim.extraction?.finding_summary,
+            confidence: claim.extraction?.confidence,
+            primary_query: claim.search?.primary_query
           }, { onConflict: 'claim_id' });
         }
         
-        console.log(`💾 Saved ${claims.length} claims to database`);
+        console.log(`💾 Saved video + ${claims.length} claims to database`);
       } catch (dbError) {
         console.warn('⚠️ Failed to save to database:', dbError.message);
       }

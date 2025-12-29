@@ -142,6 +142,8 @@ Stop analyzing after the ${this.config.fastTrackMinutes}:00 mark.`;
             job.fastTrackClaims = claims;
             job.fastTrackCompletedAt = Date.now();
             job.status = 'fast_track_complete';
+            // Save to database
+            await this.saveToDatabase(videoId, youtubeUrl, claims);
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`⚡ Fast track complete: ${claims.length} claims in ${elapsed}s`);
         }
@@ -168,6 +170,8 @@ Analyze the ENTIRE video from start to finish.`;
             job.allClaims = this.deduplicateClaims([...job.fastTrackClaims, ...claims]);
             job.fullProcessingCompletedAt = Date.now();
             job.status = 'complete';
+            // Save all claims to database (overwrite fast track)
+            await this.saveToDatabase(videoId, youtubeUrl, job.allClaims);
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`🎬 Full processing complete: ${job.allClaims.length} total claims in ${elapsed}s`);
         }
@@ -237,9 +241,18 @@ Analyze the ENTIRE video from start to finish.`;
     deduplicateClaims(claims) {
         const seen = new Map();
         for (const claim of claims) {
-            // Key by timestamp + author (or first 50 chars of segment)
-            const key = `${claim.timestamp}_${claim.extraction.author_normalized || claim.segment.full_text.slice(0, 50)}`;
+            // Key by timestamp + first 40 chars of finding (normalized)
+            const findingKey = (claim.extraction.finding_summary || claim.segment.full_text || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, '')
+                .slice(0, 40);
+            const key = `${claim.timestamp}_${findingKey}`;
+            // Keep the more complete version (one with author)
             if (!seen.has(key)) {
+                seen.set(key, claim);
+            }
+            else if (claim.extraction.author_normalized && !seen.get(key)?.extraction.author_normalized) {
+                // Replace with version that has author
                 seen.set(key, claim);
             }
         }
@@ -259,6 +272,44 @@ Analyze the ENTIRE video from start to finish.`;
     extractVideoId(url) {
         const match = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
         return match ? `yt-${match[1]}` : `yt-${Date.now()}`;
+    }
+    // ─────────────────────────────────────────────────────────────
+    // Database Persistence
+    // ─────────────────────────────────────────────────────────────
+    async saveToDatabase(videoId, youtubeUrl, claims) {
+        const supabase = this.config.supabase;
+        if (!supabase) {
+            console.log('⏭️ No database client, skipping persistence');
+            return;
+        }
+        try {
+            // Upsert video record
+            await supabase.from('videos').upsert({
+                id: videoId,
+                url: youtubeUrl,
+                claims_count: claims.length,
+                first_analyzed_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+            // Upsert claims
+            for (const claim of claims) {
+                await supabase.from('claims').upsert({
+                    claim_id: claim.claim_id,
+                    video_id: claim.video_id,
+                    timestamp: claim.timestamp,
+                    segment_text: claim.segment?.full_text || '',
+                    author_mentioned: claim.extraction?.author_mentioned,
+                    author_normalized: claim.extraction?.author_normalized,
+                    institution_mentioned: claim.extraction?.institution_mentioned,
+                    finding_summary: claim.extraction?.finding_summary,
+                    confidence: claim.extraction?.confidence,
+                    primary_query: claim.search?.primary_query
+                }, { onConflict: 'claim_id' });
+            }
+            console.log(`💾 Saved ${claims.length} claims to database`);
+        }
+        catch (error) {
+            console.warn('⚠️ Database save failed:', error.message);
+        }
     }
 }
 export const hybridProcessor = new HybridProcessor();
