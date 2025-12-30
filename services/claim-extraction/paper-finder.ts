@@ -29,10 +29,10 @@ export class PaperFinder {
    * Find the best matching paper for a claim
    */
   async find(claim: SynthesizedClaim): Promise<PaperSearchResult> {
-    // Build clean, deduplicated queries
-    const rawQueries = [claim.search.primary_query, ...claim.search.fallback_queries];
-    const queries = rawQueries.map(q => this.cleanQuery(q));
+    // Build multiple query strategies
+    const queries = this.buildSearchQueries(claim);
     const attempts: SearchAttempt[] = [];
+    console.log(`   📝 Trying ${queries.length} query strategies...`);
     
     for (const query of queries) {
       // 1. Try OpenAlex first (free, has abstracts, no rate limits)
@@ -162,8 +162,9 @@ export class PaperFinder {
   
   private async searchGoogle(query: string): Promise<PaperResult[]> {
     try {
-      const academicSites = 'site:pubmed.ncbi.nlm.nih.gov OR site:ncbi.nlm.nih.gov/pmc OR site:researchgate.net OR site:doi.org';
-      const fullQuery = `${query} ${academicSites}`;
+      // Don't restrict sites - let Google rank naturally like manual search
+      // Just add "study" or "research" to nudge towards academic results
+      const fullQuery = `${query} study OR research`;
       
       const params = new URLSearchParams({
         key: this.googleApiKey,
@@ -233,7 +234,42 @@ export class PaperFinder {
     if (url.includes('researchgate.net')) {
       return this.scrapeResearchGate(url);
     }
-    return null;
+    // Generic fallback - try to extract abstract from any page
+    return this.scrapeGeneric(url);
+  }
+  
+  private async scrapeGeneric(url: string): Promise<Partial<PaperResult> | null> {
+    try {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LumosBot/1.0)' }
+      });
+      if (!response.ok) return null;
+      
+      const html = await response.text();
+      
+      // Try common abstract patterns
+      const abstractPatterns = [
+        /<meta[^>]*name="description"[^>]*content="([^"]+)"/i,
+        /<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i,
+        /<div[^>]*class="[^"]*abstract[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+        /<section[^>]*class="[^"]*abstract[^"]*"[^>]*>([\s\S]*?)<\/section>/i,
+        /<p[^>]*class="[^"]*abstract[^"]*"[^>]*>([\s\S]*?)<\/p>/i,
+      ];
+      
+      for (const pattern of abstractPatterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+          const abstract = match[1].replace(/<[^>]+>/g, '').trim();
+          if (abstract.length > 50) {
+            return { abstract };
+          }
+        }
+      }
+      
+      return null;
+    } catch {
+      return null;
+    }
   }
   
   private async scrapePubMed(url: string): Promise<Partial<PaperResult> | null> {
@@ -303,6 +339,81 @@ export class PaperFinder {
   /**
    * Clean and deduplicate query words
    */
+  /**
+   * Build multiple search query strategies for better paper discovery
+   */
+  private buildSearchQueries(claim: SynthesizedClaim): string[] {
+    const queries: string[] = [];
+    const seen = new Set<string>();
+    
+    const addQuery = (q: string) => {
+      const cleaned = this.cleanQuery(q);
+      if (cleaned.length > 10 && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        queries.push(cleaned);
+      }
+    };
+    
+    // Strategy 1: Original primary query from Gemini
+    if (claim.search.primary_query) {
+      addQuery(claim.search.primary_query);
+    }
+    
+    // Strategy 2: Author + key terms from finding (if author exists)
+    if (claim.extraction.author_normalized) {
+      const keyTerms = this.extractKeyTerms(claim.extraction.finding_summary);
+      addQuery(`${claim.extraction.author_normalized} ${keyTerms}`);
+    }
+    
+    // Strategy 3: First 100 chars of finding summary (like user did manually!)
+    const findingQuery = claim.extraction.finding_summary.slice(0, 100);
+    addQuery(findingQuery);
+    
+    // Strategy 4: Institution + key terms (if institution exists)
+    if (claim.extraction.institution_mentioned) {
+      const keyTerms = this.extractKeyTerms(claim.extraction.finding_summary);
+      addQuery(`${claim.extraction.institution_mentioned} ${keyTerms}`);
+    }
+    
+    // Strategy 5: Fallback queries from Gemini
+    for (const q of claim.search.fallback_queries) {
+      addQuery(q);
+    }
+    
+    // Strategy 6: Just key terms from finding (last resort)
+    addQuery(this.extractKeyTerms(claim.extraction.finding_summary));
+    
+    return queries.slice(0, 5); // Max 5 queries to avoid too many API calls
+  }
+  
+  /**
+   * Extract key terms from a text (nouns, numbers, technical terms)
+   */
+  private extractKeyTerms(text: string): string {
+    // Remove common words, keep nouns/numbers/technical terms
+    const stopWords = new Set([
+      'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'must', 'can', 'that', 'which', 'who', 'whom',
+      'this', 'these', 'those', 'it', 'its', 'they', 'them', 'their', 'and',
+      'or', 'but', 'if', 'then', 'than', 'when', 'where', 'how', 'what', 'why',
+      'with', 'without', 'for', 'from', 'to', 'of', 'on', 'in', 'at', 'by',
+      'about', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+      'between', 'under', 'over', 'out', 'up', 'down', 'off', 'more', 'less',
+      'most', 'least', 'some', 'any', 'all', 'both', 'each', 'few', 'many',
+      'much', 'other', 'another', 'such', 'no', 'not', 'only', 'own', 'same',
+      'so', 'as', 'also', 'just', 'even', 'because', 'although', 'while'
+    ]);
+    
+    const words = text.toLowerCase().split(/\s+/);
+    const keyTerms = words
+      .map(w => w.replace(/[^a-z0-9-]/g, ''))
+      .filter(w => w.length > 3 && !stopWords.has(w))
+      .slice(0, 8); // Keep top 8 terms
+    
+    return keyTerms.join(' ');
+  }
+  
   private cleanQuery(query: string): string {
     const words = query.toLowerCase().split(/\s+/);
     const seen = new Set<string>();

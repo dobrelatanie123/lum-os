@@ -11,6 +11,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { normalizeAuthor } from './author-normalization.js';
 import type { GeminiSynthesizedClaim } from './gemini-extractor.js';
+import { VerificationPipeline } from './verification-pipeline.js';
+import type { SynthesizedClaim } from './types.js';
 
 // Lazy-init Gemini client
 let genAI: GoogleGenerativeAI | null = null;
@@ -30,6 +32,7 @@ function getGemini(): GoogleGenerativeAI {
 interface ProcessingStatus {
   videoId: string;
   videoUrl: string;
+  videoTitle: string | null;
   status: 'processing' | 'fast_track_complete' | 'complete' | 'error';
   fastTrackClaims: GeminiSynthesizedClaim[];
   allClaims: GeminiSynthesizedClaim[];
@@ -54,42 +57,53 @@ const DEFAULT_CONFIG: HybridConfig = {
 // ─────────────────────────────────────────────────────────────
 
 const EXTRACTION_PROMPT = `
-You are a fact-checking assistant analyzing a podcast video.
+You are a strict fact-checking assistant. Extract ONLY verifiable scientific claims.
 
-## WHAT TO EXTRACT
+## STRICT REQUIREMENTS - A claim MUST have AT LEAST ONE of:
+1. A NAMED researcher (e.g., "Dr. Layne Norton", "Jose Antonio", "Chris Barakat")
+2. A NAMED institution (e.g., "Harvard", "University of Sydney", "ISSN")
+3. A SPECIFIC study reference (e.g., "a 2019 meta-analysis", "a metabolic ward study with 20 subjects")
 
-Extract claims containing:
-- Named researchers (Dr., Professor) + their findings
-- Named institutions (University of X, Harvard) + their findings
-- Specific studies ("a 2013 study by Bray...", "meta-analysis of 62 studies...")
-- Study types with specific outcomes ("metabolic ward study found...", "RCT showed...")
+## ABSOLUTELY SKIP (do NOT extract):
+- Intro teasers/highlights in first 60 seconds that preview later content
+- Vague claims: "studies show...", "research suggests...", "science says..." (NO specifics = NO extraction)
+- Host opinions without citations
+- General statements: "protein builds muscle", "calories matter"
+- Sponsor segments, ads
+- Questions being asked (only extract answers with citations)
 
-## WHAT TO SKIP
+## EXAMPLES OF WHAT NOT TO EXTRACT:
+❌ "Caloric deficit is not required" - no author, no study
+❌ "The answer is yes" - not a claim
+❌ "Studies have shown recomp is possible" - no specific study
+❌ "It's possible to gain muscle and lose fat" - general statement
 
-- Personal anecdotes ("I started taking...", "In my experience...")
-- Vague references ("studies show..." without specifics)
-- Expert opinions (not citing research)
-- Sponsor segments, ads, promotional content
+## EXAMPLES OF WHAT TO EXTRACT:
+✅ "Chris Barakat compiled 10 studies showing recomposition phenomenon" - named researcher + specific count
+✅ "Jose Antonio's 2014 study found subjects eating 800 extra calories from protein..." - named researcher + specific study
+✅ "A metabolic ward study at NIH found..." - specific study type + institution
 
-## OUTPUT FORMAT (JSON only)
+## OUTPUT FORMAT (JSON only, empty array if no valid claims)
 
 {
   "claims": [
     {
       "timestamp": "MM:SS",
-      "segment": "Exact quote containing the claim",
-      "author_mentioned": "Researcher name or null",
-      "institution_mentioned": "Institution or null",
-      "finding_summary": "What the study reportedly found",
+      "segment": "Exact quote from video",
+      "author_mentioned": "Full researcher name or null",
+      "institution_mentioned": "Institution name or null", 
+      "finding_summary": "Specific finding with numbers/details",
       "confidence": "high|medium|low",
       "search_queries": {
-        "primary_query": "author surname + key terms",
-        "topic_query": "scientific terminology only",
-        "broad_query": "broader fallback"
+        "primary_query": "author surname + key finding terms",
+        "topic_query": "scientific terminology",
+        "broad_query": "broader topic"
       }
     }
   ]
 }
+
+Remember: Quality over quantity. Only extract claims that can actually be verified against real papers.
 `;
 
 // ─────────────────────────────────────────────────────────────
@@ -108,7 +122,7 @@ export class HybridProcessor {
    * Start hybrid processing for a video
    * Returns immediately with job ID, processes in background
    */
-  async startProcessing(youtubeUrl: string): Promise<string> {
+  async startProcessing(youtubeUrl: string, videoTitle?: string): Promise<string> {
     const videoId = this.extractVideoId(youtubeUrl);
     
     // Check if already processing
@@ -122,6 +136,7 @@ export class HybridProcessor {
     const job: ProcessingStatus = {
       videoId,
       videoUrl: youtubeUrl,
+      videoTitle: videoTitle || null,
       status: 'processing',
       fastTrackClaims: [],
       allClaims: [],
@@ -247,10 +262,15 @@ Analyze the ENTIRE video from start to finish.`;
     prompt: string, 
     videoId: string
   ): Promise<GeminiSynthesizedClaim[]> {
-    const model = getGemini().getGenerativeModel({ model: this.config.modelName });
+    const model = getGemini().getGenerativeModel({ 
+      model: this.config.modelName,
+      generationConfig: {
+        responseMimeType: "application/json"
+      }
+    });
     
     const result = await model.generateContent([
-      { text: prompt },
+      { text: prompt + "\n\nRespond ONLY with valid JSON, no other text." },
       {
         fileData: {
           fileUri: youtubeUrl,
@@ -311,19 +331,34 @@ Analyze the ENTIRE video from start to finish.`;
     const seen = new Map<string, GeminiSynthesizedClaim>();
     
     for (const claim of claims) {
-      // Key by timestamp + first 40 chars of finding (normalized)
-      const findingKey = (claim.extraction.finding_summary || claim.segment.full_text || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '')
-        .slice(0, 40);
-      const key = `${claim.timestamp}_${findingKey}`;
+      // Primary key: timestamp + author (if author exists)
+      // This catches same claim phrased differently by Gemini
+      const author = claim.extraction.author_normalized || claim.extraction.author_mentioned || '';
       
-      // Keep the more complete version (one with author)
+      let key: string;
+      if (author) {
+        // If we have an author, use timestamp + author as key
+        key = `${claim.timestamp}_${author.toLowerCase().replace(/[^a-z]/g, '')}`;
+      } else {
+        // No author: use timestamp + first 30 chars of finding
+        const findingKey = (claim.extraction.finding_summary || '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '')
+          .slice(0, 30);
+        key = `${claim.timestamp}_${findingKey}`;
+      }
+      
+      // Keep the first version (or replace with more complete one)
       if (!seen.has(key)) {
         seen.set(key, claim);
-      } else if (claim.extraction.author_normalized && !seen.get(key)?.extraction.author_normalized) {
-        // Replace with version that has author
-        seen.set(key, claim);
+      } else {
+        const existing = seen.get(key)!;
+        // Prefer version with longer finding
+        const existingLen = existing.extraction.finding_summary?.length || 0;
+        const newLen = claim.extraction.finding_summary?.length || 0;
+        if (newLen > existingLen) {
+          seen.set(key, claim);
+        }
       }
     }
     
@@ -363,10 +398,15 @@ Analyze the ENTIRE video from start to finish.`;
       return;
     }
     
+    // Get video title from job
+    const job = this.processingJobs.get(videoId);
+    const videoTitle = job?.videoTitle || null;
+    
     try {
       // Upsert video record
       await supabase.from('videos').upsert({
         id: videoId,
+        title: videoTitle,
         url: youtubeUrl,
         claims_count: claims.length,
         first_analyzed_at: new Date().toISOString()
@@ -389,9 +429,94 @@ Analyze the ENTIRE video from start to finish.`;
       }
       
       console.log(`💾 Saved ${claims.length} claims to database`);
+      
+      // Trigger background verification (non-blocking)
+      this.runBackgroundVerification(claims).catch(err => {
+        console.warn('⚠️ Background verification failed:', err.message);
+      });
+      
     } catch (error: any) {
       console.warn('⚠️ Database save failed:', error.message);
     }
+  }
+  
+  // ─────────────────────────────────────────────────────────────
+  // Background Verification
+  // ─────────────────────────────────────────────────────────────
+  
+  private async runBackgroundVerification(claims: GeminiSynthesizedClaim[]): Promise<void> {
+    const supabase = this.config.supabase;
+    if (!supabase) return;
+    
+    console.log(`🔬 Starting background verification for ${claims.length} claims...`);
+    
+    const verifier = new VerificationPipeline();
+    
+    for (const claim of claims) {
+      try {
+        // Convert to SynthesizedClaim format for verification pipeline
+        const synthClaim: SynthesizedClaim = {
+          claim_id: claim.claim_id,
+          video_id: claim.video_id,
+          segment: {
+            full_text: claim.segment?.full_text || '',
+            word_count: claim.segment?.word_count || 0
+          },
+          extraction: {
+            author_mentioned: claim.extraction?.author_mentioned || null,
+            author_normalized: claim.extraction?.author_normalized || null,
+            author_variants: [],
+            institution_mentioned: claim.extraction?.institution_mentioned || null,
+            finding_summary: claim.extraction?.finding_summary || '',
+            confidence: (claim.extraction?.confidence as 'high' | 'medium' | 'low') || 'medium'
+          },
+          search: {
+            primary_query: claim.search?.primary_query || '',
+            fallback_queries: claim.search?.fallback_queries || []
+          }
+        };
+        
+        // Run verification
+        const verified = await verifier.verifyClaim(synthClaim);
+        
+        // Update claim in database
+        const updateData: any = {
+          verified_at: new Date().toISOString()
+        };
+        
+        if (verified.verification.best_paper) {
+          updateData.paper_url = verified.verification.best_paper.url;
+          updateData.paper_title = verified.verification.best_paper.title;
+          updateData.paper_authors = verified.verification.best_paper.authors?.join(', ');
+          updateData.paper_year = verified.verification.best_paper.year;
+          updateData.paper_abstract = verified.verification.best_paper.abstract?.slice(0, 1000);
+        }
+        
+        if (verified.verification.result) {
+          updateData.verification_verdict = verified.verification.result.verdict;
+          updateData.verification_explanation = verified.verification.result.explanation;
+        }
+        
+        const { error: updateError } = await supabase
+          .from('claims')
+          .update(updateData)
+          .eq('claim_id', claim.claim_id);
+        
+        if (updateError) {
+          console.warn(`⚠️ DB update failed for ${claim.claim_id}:`, updateError.message);
+        } else {
+          console.log(`✅ Verified: ${claim.claim_id} → ${verified.verification.result?.verdict || 'no_paper_found'}`);
+        }
+        
+        // Small delay to avoid rate limits
+        await new Promise(r => setTimeout(r, 1000));
+        
+      } catch (err: any) {
+        console.warn(`⚠️ Verification failed for ${claim.claim_id}:`, err.message);
+      }
+    }
+    
+    console.log(`🔬 Background verification complete`);
   }
 }
 

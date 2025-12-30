@@ -295,7 +295,7 @@ class LumosPopup {
           <span class="claim-confidence ${claim.confidence || 'medium'}">${(claim.confidence || 'MEDIUM').toUpperCase()}</span>
         </div>
         ${claim.author ? `<div class="claim-author">👤 ${claim.author}</div>` : ''}
-        <div class="claim-text">${this.truncate(claim.finding || claim.segment || '', 100)}</div>
+        <div class="claim-text">${claim.finding || claim.segment || ''}</div>
       </div>
     `).join('');
     

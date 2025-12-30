@@ -154,11 +154,15 @@ class LumosYouTubeMonitor {
     this.updateBadge('...');
 
     try {
+      const videoTitle = this.getVideoTitle();
       console.log('📡 Calling API: POST /api/video/start');
       const response = await fetch(`${this.apiUrl}/api/video/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtube_url: youtubeUrl })
+        body: JSON.stringify({ 
+          youtube_url: youtubeUrl,
+          video_title: videoTitle
+        })
       });
 
       if (!response.ok) {

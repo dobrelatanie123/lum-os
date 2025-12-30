@@ -768,14 +768,14 @@ app.post('/api/analyze', async (req, res) => {
 // Start hybrid processing (call when video starts playing)
 app.post('/api/video/start', async (req, res) => {
   try {
-    const { youtube_url } = req.body;
+    const { youtube_url, video_title } = req.body;
     
     if (!youtube_url) {
       return res.status(400).json({ success: false, message: 'Missing youtube_url' });
     }
     
     const processor = await getHybridProcessor();
-    const videoId = await processor.startProcessing(youtube_url);
+    const videoId = await processor.startProcessing(youtube_url, video_title);
     
     res.json({
       success: true,
