@@ -829,31 +829,68 @@ app.get('/api/video/claims/:videoId', async (req, res) => {
     const processor = await getHybridProcessor();
     const status = processor.getStatus(videoId);
     
-    if (!status) {
-      return res.status(404).json({ success: false, message: 'Video not found' });
+    // If there's an active processing job, use in-memory claims
+    if (status) {
+      const claims = timestamp 
+        ? processor.getClaimsUpTo(videoId, timestamp)
+        : (status.allClaims.length > 0 ? status.allClaims : status.fastTrackClaims);
+      
+      return res.json({
+        success: true,
+        data: {
+          video_id: videoId,
+          status: status.status,
+          claims_count: claims.length,
+          claims: claims.map(c => ({
+            claim_id: c.claim_id,
+            timestamp: c.timestamp,
+            segment: c.segment?.full_text || c.segment,
+            author: c.extraction?.author_normalized || c.extraction?.author_mentioned,
+            finding: c.extraction?.finding_summary,
+            confidence: c.extraction?.confidence,
+            search_queries: c.search
+          }))
+        }
+      });
     }
     
-    // If timestamp provided, filter claims up to that point
-    const claims = timestamp 
-      ? processor.getClaimsUpTo(videoId, timestamp)
-      : (status.allClaims.length > 0 ? status.allClaims : status.fastTrackClaims);
-    
-    res.json({
-      success: true,
-      data: {
-        video_id: videoId,
-        status: status.status,
-        claims_count: claims.length,
-        claims: claims.map(c => ({
-          timestamp: c.timestamp,
-          segment: c.segment.full_text,
-          author: c.extraction.author_normalized || c.extraction.author_mentioned,
-          finding: c.extraction.finding_summary,
-          confidence: c.extraction.confidence,
-          search_queries: c.search
-        }))
+    // No active job - fetch from database
+    if (supabase) {
+      const { data: dbClaims, error } = await supabase
+        .from('claims')
+        .select('*')
+        .eq('video_id', videoId)
+        .order('timestamp');
+      
+      if (error) {
+        console.warn('DB fetch error:', error.message);
+        return res.status(404).json({ success: false, message: 'Video not found' });
       }
-    });
+      
+      if (dbClaims && dbClaims.length > 0) {
+        return res.json({
+          success: true,
+          data: {
+            video_id: videoId,
+            status: 'complete',
+            claims_count: dbClaims.length,
+            claims: dbClaims.map(c => ({
+              claim_id: c.claim_id,
+              timestamp: c.timestamp,
+              segment: c.segment_text,
+              author: c.author_normalized || c.author_mentioned,
+              finding: c.finding_summary,
+              confidence: c.confidence,
+              verification_verdict: c.verification_verdict,
+              paper_title: c.paper_title,
+              paper_url: c.paper_url
+            }))
+          }
+        });
+      }
+    }
+    
+    return res.status(404).json({ success: false, message: 'Video not found' });
     
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

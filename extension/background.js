@@ -4,8 +4,8 @@ class LumosBackground {
     this.alertsStorage = new Map();
     this.groupedStorage = new Map(); // videoId -> latest grouped topics
     this.pollers = new Map(); // videoId -> intervalId
-    // Use API server as default to avoid CORS (it proxies to Astro and sets CORS: *)
-    this.astroUrl = 'http://localhost:3001';
+    // Astro URL for web pages (claim details, alerts, etc.)
+    this.astroUrl = 'http://localhost:4321';
     this.popupWindowId = null; // external popup window id
     this.lastAutoOpenAt = 0;
     this.autoOpenCooldownMs = 8000;
@@ -31,10 +31,10 @@ class LumosBackground {
       }
     });
 
-    // Load settings
-    chrome.storage.sync.get(['apiUrl', 'astroUrl'], (res) => {
-      if (res.apiUrl) this.astroUrl = res.apiUrl;
-      else if (res.astroUrl) this.astroUrl = res.astroUrl;
+    // Load settings (apiUrl is for API server, astroUrl is for frontend)
+    chrome.storage.sync.get(['astroUrl'], (res) => {
+      if (res.astroUrl) this.astroUrl = res.astroUrl;
+      // Keep default localhost:4321 if not set
     });
 
     // Handle browser notifications click
@@ -131,6 +131,11 @@ class LumosBackground {
 
       case 'STOP_RECORDING_BG':
         this.stopBackgroundCapture(message.videoId);
+        sendResponse({ success: true });
+        break;
+
+      case 'OPEN_VERIFICATION':
+        this.openClaimDetails(message.claim, message.videoId);
         sendResponse({ success: true });
         break;
 
@@ -540,6 +545,17 @@ class LumosBackground {
       }
     } catch (e) {
       console.warn('uploadChunk failed', e?.message || e);
+    }
+  }
+
+  async openClaimDetails(claim, videoId) {
+    try {
+      const claimId = claim?.claim_id || claim?.id || `${videoId}_unknown`;
+      const base = this.astroUrl || 'http://localhost:4321';
+      const url = `${base}/claim/${claimId}`;
+      await chrome.tabs.create({ url, active: true });
+    } catch (e) {
+      console.error('Failed to open claim details:', e);
     }
   }
 

@@ -237,8 +237,8 @@ Analyze the ENTIRE video from start to finish.`;
       job.fullProcessingCompletedAt = Date.now();
       job.status = 'complete';
       
-      // Save all claims to database (overwrite fast track)
-      await this.saveToDatabase(videoId, youtubeUrl, job.allClaims);
+      // Save all claims to database and trigger verification
+      await this.saveToDatabase(videoId, youtubeUrl, job.allClaims, true);
       
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       console.log(`🎬 Full processing complete: ${job.allClaims.length} total claims in ${elapsed}s`);
@@ -390,7 +390,8 @@ Analyze the ENTIRE video from start to finish.`;
   private async saveToDatabase(
     videoId: string, 
     youtubeUrl: string, 
-    claims: GeminiSynthesizedClaim[]
+    claims: GeminiSynthesizedClaim[],
+    triggerVerification: boolean = false  // Only verify after full processing
   ): Promise<void> {
     const supabase = this.config.supabase;
     if (!supabase) {
@@ -430,10 +431,12 @@ Analyze the ENTIRE video from start to finish.`;
       
       console.log(`💾 Saved ${claims.length} claims to database`);
       
-      // Trigger background verification (non-blocking)
-      this.runBackgroundVerification(claims).catch(err => {
-        console.warn('⚠️ Background verification failed:', err.message);
-      });
+      // Only trigger verification after full processing (not fast track)
+      if (triggerVerification) {
+        this.runBackgroundVerification(claims).catch(err => {
+          console.warn('⚠️ Background verification failed:', err.message);
+        });
+      }
       
     } catch (error: any) {
       console.warn('⚠️ Database save failed:', error.message);

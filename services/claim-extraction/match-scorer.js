@@ -45,11 +45,11 @@ export class MatchScorer {
     // Scoring methods
     // ─────────────────────────────────────────────────────────────
     scoreAuthorMatch(paper, claim) {
-        if (!claim.extraction.author_normalized)
+        if (!claim.extraction?.author_normalized)
             return 0;
         const claimAuthor = claim.extraction.author_normalized.toLowerCase();
         const claimSurname = claimAuthor.split(' ').pop() || '';
-        const variants = claim.extraction.author_variants.map(v => v.toLowerCase());
+        const variants = (claim.extraction.author_variants || []).map(v => v.toLowerCase());
         // Check each paper author
         for (const paperAuthor of paper.authors) {
             const paperAuthorLower = paperAuthor.toLowerCase();

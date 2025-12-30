@@ -332,8 +332,9 @@ class LumosPopup {
   }
 
   async openClaimDetails(claim) {
-    // Open verification page for this claim
-    const url = `${this.astroUrl}/alerts?claim=${encodeURIComponent(JSON.stringify(claim))}`;
+    // Open claim details page
+    const claimId = claim.claim_id || claim.id;
+    const url = `${this.astroUrl}/claim/${claimId}`;
     await chrome.tabs.create({ url });
     window.close();
   }

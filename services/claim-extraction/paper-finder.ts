@@ -348,42 +348,64 @@ export class PaperFinder {
     
     const addQuery = (q: string) => {
       const cleaned = this.cleanQuery(q);
-      if (cleaned.length > 10 && !seen.has(cleaned)) {
+      if (cleaned.length > 5 && !seen.has(cleaned)) {
         seen.add(cleaned);
         queries.push(cleaned);
       }
     };
     
-    // Strategy 1: Original primary query from Gemini
+    // Strategy 1: SHORT core topic phrase (2-4 key nouns) - OpenAlex works best with simple queries
+    const corePhrase = this.extractCorePhrase(claim.extraction.finding_summary);
+    if (corePhrase.length > 5) {
+      addQuery(corePhrase);
+    }
+    
+    // Strategy 2: Original primary query from Gemini (often has paper title embedded)
     if (claim.search.primary_query) {
       addQuery(claim.search.primary_query);
     }
     
-    // Strategy 2: Author + key terms from finding (if author exists)
-    if (claim.extraction.author_normalized) {
-      const keyTerms = this.extractKeyTerms(claim.extraction.finding_summary);
-      addQuery(`${claim.extraction.author_normalized} ${keyTerms}`);
-    }
+    // Strategy 3: Key terms only (3-5 important words)
+    const keyTerms = this.extractKeyTerms(claim.extraction.finding_summary);
+    addQuery(keyTerms);
     
-    // Strategy 3: First 100 chars of finding summary (like user did manually!)
-    const findingQuery = claim.extraction.finding_summary.slice(0, 100);
+    // Strategy 4: First 50 chars of finding summary
+    const findingQuery = claim.extraction.finding_summary.slice(0, 50);
     addQuery(findingQuery);
     
-    // Strategy 4: Institution + key terms (if institution exists)
-    if (claim.extraction.institution_mentioned) {
-      const keyTerms = this.extractKeyTerms(claim.extraction.finding_summary);
-      addQuery(`${claim.extraction.institution_mentioned} ${keyTerms}`);
-    }
-    
     // Strategy 5: Fallback queries from Gemini
-    for (const q of claim.search.fallback_queries) {
+    for (const q of claim.search.fallback_queries || []) {
       addQuery(q);
     }
     
-    // Strategy 6: Just key terms from finding (last resort)
-    addQuery(this.extractKeyTerms(claim.extraction.finding_summary));
+    return queries.slice(0, 6); // Max 6 queries
+  }
+  
+  /**
+   * Extract core phrase - the main topic in 2-4 words
+   * E.g., "A review of body recomposition studies" → "body recomposition"
+   */
+  private extractCorePhrase(text: string): string {
+    // Look for common patterns: "study on X", "research about X", "found that X"
+    const patterns = [
+      /(?:study|research|review|paper|article) (?:on|about|of) ([a-z\s-]+)/i,
+      /([a-z]+ (?:recomposition|synthesis|metabolism|oxidation|absorption|supplementation))/i,
+      /([a-z]+(?:-[a-z]+)? (?:protein|diet|exercise|training|intake))/i,
+    ];
     
-    return queries.slice(0, 5); // Max 5 queries to avoid too many API calls
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match?.[1]) {
+        return match[1].trim().toLowerCase();
+      }
+    }
+    
+    // Fallback: take 2-3 important-looking words
+    const words = text.toLowerCase().split(/\s+/)
+      .filter(w => w.length > 4)
+      .filter(w => !['about', 'found', 'study', 'shows', 'their', 'these', 'those', 'which', 'where', 'while'].includes(w));
+    
+    return words.slice(0, 3).join(' ');
   }
   
   /**
